@@ -95,8 +95,8 @@ if [ -n "$line_violations" ] || [ -n "$dir_violations" ]; then
   fi
   echo ""
   echo "→ 处理方式：拆分文件；或在该目录下新建子目录分层。"
-  echo "  ⚠️ scripts/ 与 backend/tests/unit/ 均已达 8 的上限，不得再加文件"
-  echo "     （TDD R12 / §3 目录约定第 5 条）。"
+  echo "  ⚠️ scripts/ 已达 8 上限；其余目录按上方清单核对剩余额度，"
+  echo "     需要新增文件时先建子目录分层（TDD R12 / §3 目录约定第 5 条）。"
   exit 1
 fi
 

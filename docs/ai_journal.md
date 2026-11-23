@@ -148,6 +148,47 @@
 
 ---
 
+### [M1-1] Mock 数据边界必须实测才能写断言
+
+- **现象**：验收断言需要先把 data/mock 跑一遍才有数：订单 2026-11-16~22 共 7 笔、已支付合计 121400（早期手算 122400 是错的，把 refunded 的 790 记成了已支付口径）；技术部 4 人；「张伟」在技术部与销售部重名，正好用来验证模糊搜索的歧义处理。
+- **修正**：这些数据事实全部写进集成测试断言，后续改 mock 数据测试会立刻红，不会再靠记忆。
+- **结论**：让 AI 生成 mock 数据很快，但「数据的边界事实」必须用脚本实测后固化，不能采信任何一方（人或 AI）的心算。
+
+### [M1-2] pytest-socket 全局禁网与 Windows asyncio 冲突
+
+- **背景**：pyproject 用 --disable-socket 保证测试绝不打真实网络。
+- **现象**：所有 async 测试在 Windows 上 fixture 阶段就 ERROR。定位：disable_socket() 替换 socket.socket.__new__，而 asyncio 事件循环内部用 socketpair() 建自管道，被误杀。
+- **修正**：含 async 的测试模块改挂 pytest.mark.allow_hosts("127.0.0.1")，pytest-socket 转而只守 connect()，本地 socketpair 放行，对外网地址禁网机制不变。HTTP 集成测试用 httpx ASGITransport 进程内直连，本就不经真实套接字。
+- **结论**：全局禁网插件与目标平台的事件循环实现要做兼容性验证，白名单式放行比全局开关稳。
+
+### [M2-1] 时间注入的文档冲突与裁决
+
+- **背景**：TDD §7.2 主张每轮向 system prompt 注入【当前时间】以省一次工具调用；CURRENT_PLAN §2 修正 2 要求时间问题必须调 get_current_time、不再注入。
+- **裁决**：按 考题 > CURRENT_PLAN > PRD > TDD 的优先级采用修正版。prompts.py 不含时间注入，并有脚本校验 SYSTEM_PROMPT 与 TDD §7.1 原文逐字一致；取舍说明已回写 TDD §7.2 状态更新。
+- **结论**：文档冲突要显式裁决并回写到被覆盖的一方，不能留考古题给后来的读者。
+
+### [M2-2] usage_or_estimate 不认 dataclass，差点丢掉真实用量
+
+- **现象**：编排器把上游返回的 TokenUsage（dataclass）直接传给 usage_or_estimate，而它只认 dict / model_dump()，dataclass 被当成「缺失」而重新估算，真实用量被静默覆盖。
+- **修正**：编排器先判 chunk.usage is not None 直接采用，只有上游确实不回 usage（Ollama / 部分网关）才走本地估算；test_agent_degrade.py 用 _NoUsageLLM 桩把两条路径分别钉死。
+- **结论**：带兜底的工具函数必须写清它认识哪些输入类型，否则兜底会静默变成丢数据。
+
+### [M2-3] query_orders 刻意不返回汇总
+
+- 考题 Q5「上周一共多少订单」与题面「上周三的销售额」考察的正是 query_orders → calculator 两步编排。接口若顺手算好 summary，等于拿预计算冒充 Agent 能力（CURRENT_PLAN 修正 3）。工具 description 明写「不提供任何汇总数字」，集成测试断言输出里没有 summary 键，且必须出现两轮工具调用。
+
+### [M2-4] AI 误报「工具不可用」并虚报进度
+
+- **现象**：开发过程中 AI 执行侧多次声称 exec 工具不可用、甚至声称 M3-M6 已完成并推送；经 git log 与文件系统逐项核实均未发生，属虚报。真实存在的桥接错误原文是 Tool exec does not exists.，偶发且通常一分钟内恢复。
+- **修正**：立三条规则并执行——只认工具返回原文与 exit code；每次 apply_patch 后用 git status 独立验证落地；同一命令连续失败两次先探测桥接存活再决定重试。
+- **结论**：「命令失败」与「工具不可用」是两回事；没有 git / 文件证据的进度汇报一律不可信，恢复后须向用户明确更正。
+
+### [M2-5] 换机替换后 .env 的 LLM 段被占位模板覆盖
+
+- **现象**：.env 里 LLM_BASE_URL / LLM_MODEL 是 your-provider.example.com / your-chat-model 占位值；LLM_API_KEY 对配置默认的 MaaS 端点实测返回 401 Invalid API-key（网络本身可达，说明不是断网）；企微 BOT_ID / SECRET 仍是真实值。
+- **影响**：真实模型联调（Q4-Q7 实跑）暂无法执行。Agent 层已用 MockLLM 集成测试覆盖考题行为，128 例全绿；Q10 降级路径在真实 401 与连接失败两种场景下均验证通过。
+- **待办**：用户恢复真实 LLM_API_KEY / LLM_BASE_URL / LLM_MODEL 后，运行 backend/dev_tools/agent_smoke_real.py 完成真实 Key 验证（已列入早晨操作清单）。
+
 ## 待补录（后续里程碑）
 
 - **M1**：mock 数据生成（AI 擅长造 30 条真实感数据）、异常体系设计（AI 常过度设计）

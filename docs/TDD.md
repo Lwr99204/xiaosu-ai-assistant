@@ -1204,6 +1204,12 @@ class ConversationLogView(BaseModel):
 
 > **设计权衡**：`search_knowledge_base` 作为**工具**由模型自主调用（符合 FR-3-01「让模型自己决定」），但**当前时间直接注入 system prompt**。原因：时间注入几乎零成本，却能省掉大量「先调 get_current_time」的往返；`get_current_time` 工具仍保留，用于模型需要特定时区换算的场景。这是**性能与「纯工具驱动」之间的显式取舍**，会写进 `自评.md`。
 
+> **⚠️ 状态更新（M2 实现后）**：上方【当前时间】注入方案已被 CURRENT_PLAN.md §2 修正 2 覆盖——
+> 时间类问题必须调用 get_current_time 工具，system prompt 不再注入当前时间。裁决理由：多轮对话与
+> 长驻进程里注入的时间戳会过期，形成「模型以为自己知道时间」的新鲜度错觉；验收题 Q6 考察的正是
+> 工具调用链路。文档优先级为 考题 > CURRENT_PLAN > PRD > TDD，故以修正版为准。prompts.py 已按
+> 修正版实现，并有脚本校验其与 §7.1 System Prompt 原文逐字一致。
+
 ### 7.3 Prompt 版本管理
 
 `prompts.py` 顶部定义 `SYSTEM_PROMPT_VERSION = "v1.0"`，写入 `conversations` 表（P2）。这样调 prompt 前后可对比问答质量，也是 Evals（加分项）的基础。
