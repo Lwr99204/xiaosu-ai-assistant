@@ -12,7 +12,7 @@
 ### 铁律 1：Commit 历史必须健康（淘汰项，7 分）
 
 - **禁止**攒一大堆代码一次性 `git commit -m "init"`。
-- 每个里程碑拆成 **2~5 个语义化 commit**，全项目目标 **35~45 个 commit**。
+- 每个里程碑拆成 **2~5 个语义化 commit**，全项目目标 **50+ 个 commit**（§4 给出完整序列，约 53 个；实际开发中的 `fix:` 提交只会更多）。
 - 提交信息格式：`<type>(<scope>): <中文描述>`
   - `type` ∈ `feat / fix / docs / test / chore / refactor / perf`
   - 示例：`feat(rag): 实现结构化分块器并保留原文字符偏移`
