@@ -102,9 +102,12 @@
 
 ## 4. 当前仓库状态注意事项
 
-- 工作区含另一台电脑导入的 M1 暂存与未暂存改动，禁止 reset/checkout 覆盖。
-- `errors.py`、`ids.py`、`retry.py` 存在 staged 后又修改的状态，提交前要重新核对。
-- 四个 `__init__.py` 仍是未跟踪文件。
+- 2026-11-23：企微 Gate 0 验证与 M1 基础代码已全部提交至本地 `main`（`25ae404`），
+  工作区干净，原「暂存与未跟踪改动」的描述已过时。
+- 本机为跨机迁移后的新环境：旧 `backend/.venv` 指向不存在的 `D:\Python`，已由
+  uv 用本机 CPython 3.12 重建，`uv sync --frozen` 可随时复现。
+- 本机裸 `bash` 解析到未安装发行版的 WSL，`scripts/*.sh` 需用 Git Bash 运行
+  （本机路径 `E:\Apps\Git\bin\bash.exe`）。
 - 不要把不同阶段的改动一次性混进同一个 commit。
 - 每完成阶段必须运行：Ruff、pytest、`scripts/check_limits.sh`、密钥扫描，再提交。
 
