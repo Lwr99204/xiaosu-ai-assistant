@@ -9,7 +9,7 @@
 | `embedding_service.py` | **M0（已就位）** | 本地 BGE-M3 向量化服务，OpenAI 兼容 |
 | `gen_seed_docs.py` | M2 | 由 `.md` 真源生成 `.pdf` / `.docx` 语料 |
 | `calibrate_threshold.py` | M3 | 检索阈值标定，输出分数分布直方图 |
-| `wecom_spike.py` | M9 | 企业微信智能机器人连通性 / 协议实测 |
+| `wecom_spike.py` | **Gate 0（已就位）** | 企业微信真实消息收发最小闭环 |
 
 ---
 
@@ -69,3 +69,43 @@ curl -s http://127.0.0.1:8001/health
 🔴 **0.48 这个数字最重要**：完全不相关的中文文本之间余弦基线就有 ~0.48，
 所以 `retrieval_min_score` 定在 0.35 等于**完全不过滤**，拒答 L1 层形同虚设。
 默认值已改为 **0.55**，且以 M3 `calibrate_threshold.py` 的标定结果为准（R16）。
+
+---
+
+## `wecom_spike.py` — 企业微信 Gate 0
+
+这个探针只验证平台风险，不接入 LLM、RAG 或 Agent：
+
+```text
+企业微信发来文本 → SDK 收到事件 → 回复固定文本 → 进程退出
+```
+
+### 准备配置
+
+在仓库根目录执行：
+
+```bash
+cp .env.example .env
+```
+
+只需填写 `.env` 中的 `WECOM_BOT_ID` 和 `WECOM_BOT_SECRET`。真实凭证不得写入
+`.env.example`、命令行参数、截图或日志。
+
+### 执行
+
+```bash
+cd backend
+uv sync --frozen
+
+# 仅检查凭证是否已配置，不联网
+uv run python dev_tools/wecom_spike.py --check
+
+# 建立长连接；鉴权后在企业微信里给机器人发送任意文本
+uv run python dev_tools/wecom_spike.py
+```
+
+收到固定回复“`小苏 Gate 0 连通成功`”才算通过。脚本不会打印消息正文、原始帧或凭证；
+默认回复第一条消息后退出。需要持续监听时使用 `--keep-running`。
+
+> SDK 的 `reply_stream` 接口已经由依赖源码和离线签名检查确认存在，但企业微信客户端
+> 是否逐段渲染仍必须在真实账号中实测。Gate 0 只确认单次收发，流式体验留到后续 spike。

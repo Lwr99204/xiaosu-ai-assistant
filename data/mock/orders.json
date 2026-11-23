@@ -1,0 +1,203 @@
+[
+  {
+    "id": "SO-2026-1031",
+    "amount": "4200.00",
+    "date": "2026-10-31",
+    "customer": "星辰科技",
+    "status": "paid",
+    "items": [{ "name": "企业版年度授权", "qty": 1, "unit_price": "4200.00" }]
+  },
+  {
+    "id": "SO-2026-1101",
+    "amount": "1580.00",
+    "date": "2026-11-01",
+    "customer": "蓝湾传媒",
+    "status": "paid",
+    "items": [{ "name": "标准版年度授权", "qty": 2, "unit_price": "790.00" }]
+  },
+  {
+    "id": "SO-2026-1103",
+    "amount": "12800.00",
+    "date": "2026-11-03",
+    "customer": "恒宇制造",
+    "status": "paid",
+    "items": [{ "name": "私有化部署服务", "qty": 1, "unit_price": "12800.00" }]
+  },
+  {
+    "id": "SO-2026-1105",
+    "amount": "2400.00",
+    "date": "2026-11-05",
+    "customer": "晨曦教育",
+    "status": "refunded",
+    "items": [{ "name": "培训服务包", "qty": 4, "unit_price": "600.00" }]
+  },
+  {
+    "id": "SO-2026-1107",
+    "amount": "0.00",
+    "date": "2026-11-07",
+    "customer": "星辰科技",
+    "status": "paid",
+    "items": [{ "name": "样品试用（免费）", "qty": 1, "unit_price": "0.00" }]
+  },
+  {
+    "id": "SO-2026-1109",
+    "amount": "6600.00",
+    "date": "2026-11-09",
+    "customer": "华信物流",
+    "status": "cancelled",
+    "items": [{ "name": "定制开发", "qty": 1, "unit_price": "6600.00" }]
+  },
+  {
+    "id": "SO-2026-1110",
+    "amount": "600.00",
+    "date": "2026-11-10",
+    "customer": "天工设计",
+    "status": "refunded",
+    "items": [{ "name": "培训服务包", "qty": 1, "unit_price": "600.00" }]
+  },
+  {
+    "id": "SO-2026-1111",
+    "amount": "3960.00",
+    "date": "2026-11-11",
+    "customer": "蓝湾传媒",
+    "status": "paid",
+    "items": [
+      { "name": "标准版年度授权", "qty": 5, "unit_price": "790.00" },
+      { "name": "存储扩容包", "qty": 1, "unit_price": "10.00" }
+    ]
+  },
+  {
+    "id": "SO-2026-1112",
+    "amount": "0.00",
+    "date": "2026-11-12",
+    "customer": "恒宇制造",
+    "status": "paid",
+    "items": [{ "name": "POC 测试环境（免费）", "qty": 1, "unit_price": "0.00" }]
+  },
+  {
+    "id": "SO-2026-1114",
+    "amount": "8800.00",
+    "date": "2026-11-14",
+    "customer": "天工设计",
+    "status": "pending",
+    "items": [
+      { "name": "企业版年度授权", "qty": 2, "unit_price": "4200.00" },
+      { "name": "培训服务包", "qty": 1, "unit_price": "400.00" }
+    ]
+  },
+  {
+    "id": "SO-2026-1116",
+    "amount": "15600.00",
+    "date": "2026-11-16",
+    "customer": "恒宇制造",
+    "status": "paid",
+    "items": [
+      { "name": "私有化部署服务", "qty": 1, "unit_price": "12800.00" },
+      { "name": "年度维保服务", "qty": 1, "unit_price": "2800.00" }
+    ]
+  },
+  {
+    "id": "SO-2026-1117",
+    "amount": "3000.00",
+    "date": "2026-11-17",
+    "customer": "晨曦教育",
+    "status": "paid",
+    "items": [{ "name": "培训服务包", "qty": 5, "unit_price": "600.00" }]
+  },
+  {
+    "id": "SO-2026-1118",
+    "amount": "790.00",
+    "date": "2026-11-18",
+    "customer": "华信物流",
+    "status": "refunded",
+    "items": [{ "name": "标准版年度授权", "qty": 1, "unit_price": "790.00" }]
+  },
+  {
+    "id": "SO-2026-1119",
+    "amount": "98000.00",
+    "date": "2026-11-19",
+    "customer": "星辰科技",
+    "status": "paid",
+    "items": [{ "name": "集团版整体解决方案", "qty": 1, "unit_price": "98000.00" }]
+  },
+  {
+    "id": "SO-2026-1120",
+    "amount": "4200.00",
+    "date": "2026-11-20",
+    "customer": "天工设计",
+    "status": "paid",
+    "items": [{ "name": "企业版年度授权", "qty": 1, "unit_price": "4200.00" }]
+  },
+  {
+    "id": "SO-2026-1121",
+    "amount": "1580.00",
+    "date": "2026-11-21",
+    "customer": "蓝湾传媒",
+    "status": "cancelled",
+    "items": [{ "name": "标准版年度授权", "qty": 2, "unit_price": "790.00" }]
+  },
+  {
+    "id": "SO-2026-1122",
+    "amount": "600.00",
+    "date": "2026-11-22",
+    "customer": "恒宇制造",
+    "status": "paid",
+    "items": [{ "name": "培训服务包", "qty": 1, "unit_price": "600.00" }]
+  },
+  {
+    "id": "SO-2026-1123",
+    "amount": "4200.00",
+    "date": "2026-11-23",
+    "customer": "晨曦教育",
+    "status": "paid",
+    "items": [{ "name": "企业版年度授权", "qty": 1, "unit_price": "4200.00" }]
+  },
+  {
+    "id": "SO-2026-1124",
+    "amount": "1200.00",
+    "date": "2026-11-24",
+    "customer": "晨曦教育",
+    "status": "pending",
+    "items": [{ "name": "培训服务包", "qty": 2, "unit_price": "600.00" }]
+  },
+  {
+    "id": "SO-2026-1125",
+    "amount": "12800.00",
+    "date": "2026-11-25",
+    "customer": "华信物流",
+    "status": "paid",
+    "items": [{ "name": "私有化部署服务", "qty": 1, "unit_price": "12800.00" }]
+  },
+  {
+    "id": "SO-2026-1126",
+    "amount": "8400.00",
+    "date": "2026-11-26",
+    "customer": "华信物流",
+    "status": "paid",
+    "items": [{ "name": "企业版年度授权", "qty": 2, "unit_price": "4200.00" }]
+  },
+  {
+    "id": "SO-2026-1128",
+    "amount": "4200.00",
+    "date": "2026-11-28",
+    "customer": "星辰科技",
+    "status": "refunded",
+    "items": [{ "name": "企业版年度授权", "qty": 1, "unit_price": "4200.00" }]
+  },
+  {
+    "id": "SO-2026-1130",
+    "amount": "2370.00",
+    "date": "2026-11-30",
+    "customer": "天工设计",
+    "status": "paid",
+    "items": [{ "name": "标准版年度授权", "qty": 3, "unit_price": "790.00" }]
+  },
+  {
+    "id": "SO-2026-1201",
+    "amount": "790.00",
+    "date": "2026-12-01",
+    "customer": "蓝湾传媒",
+    "status": "paid",
+    "items": [{ "name": "标准版年度授权", "qty": 1, "unit_price": "790.00" }]
+  }
+]

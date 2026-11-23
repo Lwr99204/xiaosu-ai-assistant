@@ -32,7 +32,7 @@ cd "$REPO_ROOT" || exit 1
 # ── 排除目录：第三方依赖与构建产物，不属于本项目代码 ──────────────
 prune=( -name .git )
 for d in .venv venv env node_modules .next out dist build \
-         __pycache__ .pytest_cache .ruff_cache .mypy_cache \
+         __pycache__ .pytest_cache .ruff_cache .uv-cache .mypy_cache \
          coverage htmlcov .turbo storage; do
   prune+=( -o -name "$d" )
 done

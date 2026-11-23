@@ -3,6 +3,10 @@
 > 版本 v1.0 ｜ 状态：**待评审对齐**
 > 上游文档：[PRD.md](./PRD.md)（需求与验收标准）｜ 下游文档：[DEV_PLAN.md](./DEV_PLAN.md)（实施步骤）
 > 本文档中的需求编号（`FR-x-xx` / `NFR-xx`）均指向 PRD。
+>
+> ⚠️ **执行提示（2026-11-23）**：关键冲突与落地顺序已集中修订到
+> [CURRENT_PLAN.md](./CURRENT_PLAN.md)。实现前必须先读该文件；冲突时以考题和
+> CURRENT_PLAN 为准。
 
 ---
 

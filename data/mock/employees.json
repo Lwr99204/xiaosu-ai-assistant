@@ -1,0 +1,136 @@
+[
+  {
+    "id": "001",
+    "name": "张三",
+    "dept": "技术部",
+    "level": "P6",
+    "email": "zhangsan@xiaosu.example.com",
+    "hire_date": "2021-03-15",
+    "status": "active",
+    "phone": "13800000001",
+    "manager_id": "010"
+  },
+  {
+    "id": "002",
+    "name": "李四",
+    "dept": "技术部",
+    "level": "P7",
+    "email": "lisi@xiaosu.example.com",
+    "hire_date": "2019-07-01",
+    "status": "active",
+    "phone": "13800000002",
+    "manager_id": "010"
+  },
+  {
+    "id": "003",
+    "name": "王五",
+    "dept": "销售部",
+    "level": "P5",
+    "email": "wangwu@xiaosu.example.com",
+    "hire_date": "2022-09-12",
+    "status": "active",
+    "phone": "13800000003",
+    "manager_id": null
+  },
+  {
+    "id": "004",
+    "name": "赵敏",
+    "dept": "人事部",
+    "level": "P6",
+    "email": "zhaomin@xiaosu.example.com",
+    "hire_date": "2020-05-06",
+    "status": "active",
+    "phone": "13800000004",
+    "manager_id": null
+  },
+  {
+    "id": "005",
+    "name": "陈晨",
+    "dept": "财务部",
+    "level": "P5",
+    "email": "chenchen@xiaosu.example.com",
+    "hire_date": "2023-02-20",
+    "status": "active",
+    "phone": "13800000005",
+    "manager_id": "012"
+  },
+  {
+    "id": "006",
+    "name": "张伟",
+    "dept": "技术部",
+    "level": "P4",
+    "email": "zhangwei@xiaosu.example.com",
+    "hire_date": "2024-06-03",
+    "status": "active",
+    "phone": "13800000006",
+    "manager_id": "002"
+  },
+  {
+    "id": "007",
+    "name": "张伟",
+    "dept": "销售部",
+    "level": "P5",
+    "email": "zhangwei.s@xiaosu.example.com",
+    "hire_date": "2023-11-15",
+    "status": "active",
+    "phone": "13800000007",
+    "manager_id": "003"
+  },
+  {
+    "id": "008",
+    "name": "刘洋",
+    "dept": "市场部",
+    "level": "P6",
+    "email": "liuyang@xiaosu.example.com",
+    "hire_date": "2018-04-09",
+    "status": "left",
+    "phone": "13800000008",
+    "manager_id": null,
+    "leave_date": "2026-08-31"
+  },
+  {
+    "id": "009",
+    "name": "孙悦",
+    "dept": "人事部",
+    "level": "P4",
+    "email": "sunyue@xiaosu.example.com",
+    "hire_date": "2025-01-06",
+    "status": "active",
+    "phone": "13800000009",
+    "manager_id": "004"
+  },
+  {
+    "id": "010",
+    "name": "周杰",
+    "dept": "技术部",
+    "level": "P8",
+    "email": "zhoujie@xiaosu.example.com",
+    "hire_date": "2017-08-21",
+    "status": "active",
+    "phone": "13800000010",
+    "manager_id": null
+  },
+  {
+    "id": "011",
+    "name": "吴磊",
+    "dept": "销售部",
+    "level": "P5",
+    "email": "wulei@xiaosu.example.com",
+    "hire_date": "2024-03-01",
+    "status": "left",
+    "phone": "13800000011",
+    "manager_id": "003",
+    "leave_date": "2026-10-15"
+  },
+  {
+    "id": "012",
+    "name": "郑爽",
+    "dept": "财务部",
+    "level": "P7",
+    "email": "zhengshuang@xiaosu.example.com",
+    "hire_date": "2021-10-11",
+    "status": "active",
+    "phone": "13800000012",
+    "manager_id": null
+  }
+]

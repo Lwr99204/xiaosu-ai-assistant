@@ -1,0 +1,87 @@
+# ═══════════════════════════════════════════════════════════════════════
+# 小苏 · 公司内部 AI 助手 — 后端工程定义（uv 管理，题目硬性要求）
+#
+# 分层依赖（TDD §3.1，单向，禁止反向）：
+#   api / im ──► services ──► agent / rag / tools / llm / db
+#                                     └──► core / config / schemas（叶子层）
+#   mock_api ──► 独立子域，仅依赖自身 schemas
+# ═══════════════════════════════════════════════════════════════════════
+
+[project]
+name = "xiaosu-backend"
+version = "0.1.0"
+description = "小苏 · 公司内部 AI 助手 — FastAPI 后端"
+requires-python = ">=3.12,<3.13"
+
+# ── 运行时依赖（版本下限对齐 TDD §1.1 选型总表）─────────────────────
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",       # [standard] 提供 watchfiles，--reload 需要
+    "pydantic>=2.9",                 # 题目硬性要求：全量强类型
+    "pydantic-settings>=2.6",        # 配置外置 + 启动即校验（FR-6-02）
+    "openai>=1.54",                  # OpenAI 兼容协议，一套代码通多家供应商
+    "httpx>=0.27",                   # 异步 HTTP（M3 embedding 服务自检）+ 测试客户端
+    "chromadb>=0.5",                 # 向量库（M3 起使用；按 doc_id 删除分块是硬需求）
+    "pypdf>=5.1",                    # PDF 解析（M2/M3）
+    "python-docx>=1.1",              # Word 解析（M2/M3）
+    "wecom-aibot-python-sdk>=1.0.2,<2", # Gate 0：企业微信智能机器人长连接探针
+]
+
+[dependency-groups]
+# 开发期依赖：测试与静态检查，不进运行时镜像
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",               # TDD §10.3 要求 pytest --cov
+    "pytest-socket>=0.7",            # 🔴 从机制上禁网，保证测试不碰真实 API（FR-6-09）
+    "ruff>=0.8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+# ── pytest ────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["."]
+# --disable-socket：任何测试若试图连真实网络直接失败，而不是悄悄打 API 烧配额
+addopts = "-q --strict-markers --disable-socket"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+
+[tool.coverage.report]
+precision = 1
+show_missing = true
+# M10 起在 scripts/test.sh 中启用 --cov-fail-under=85（rag/ 与 agent/）
+
+# ── ruff ──────────────────────────────────────────────────────────────
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+# embedding_service.py 是从本机 bge-m3 服务收进来的**第三方副本**（出处见
+# backend/dev_tools/README.md），保持与上游一致以便对照，不参与本项目风格检查
+extend-exclude = ["dev_tools/embedding_service.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF"]
+ignore = [
+    "E501",     # 行宽交给 formatter；中文注释按字符计易超限
+    "RUF001", "RUF002", "RUF003",  # 🔴 中文全角标点（，：（）会被判为 ambiguous unicode
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]            # 允许 re-export
+"tests/**" = ["B011"]
+
+[tool.ruff.format]
+quote-style = "double"
+docstring-code-format = false
