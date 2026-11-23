@@ -282,7 +282,7 @@ xiaosu-ai-assistant/
 │   ├── uv.lock                 # 锁文件（入库）
 │   ├── .venv/                  # 【不入库】uv 创建，名称强制 .venv
 │   ├── dev_tools/              # 【1】开发期脚本，不进运行时：gen_seed_docs.py（生成 PDF/docx 语料）
-│   └── app/
+│   ├── app/
 │       ├── main.py             # FastAPI 装配 + lifespan（≤120 行）
 │       ├── config.py           # Settings：全量环境变量强类型化
 │       ├── logging_setup.py    # logs/ 轮转 + request_id 过滤器 + 密钥脱敏
@@ -346,6 +346,10 @@ xiaosu-ai-assistant/
 │           ├── router.py       #   /api/employee/{id}、/api/attendance、/api/orders
 │           ├── repository.py   #   JSON 加载 + 内存索引 + 条件过滤
 │           └── schemas.py      #   Employee / AttendanceRecord / Order
+│   └── tests/                  # 【1】conftest.py（强制 mock + pytest-socket 禁网）
+│       ├── unit/               # 【8】L1 纯单元 🔴 已达 8 上限，新增须再建子目录
+│       ├── integration/        # 【6】L2 集成（MockLLM + 内存向量库）
+│       └── e2e/                # 【2】L3 端到端（MockLLM 模拟 IM）
 ├── frontend/                   # Next.js 15 App Router，详见 §8
 │   ├── package.json            # "type":"module"，禁 commonjs（FR-6-14）
 │   ├── pnpm-lock.yaml
@@ -383,8 +387,11 @@ xiaosu-ai-assistant/
 > **关于「单目录 ≤ 8 个文件」的三条明确约定**（会同步写进 README「工程规范」小节，避免评审歧义）：
 >
 > 1. **目录树中 `【n】` 表示该目录下的直接文件数**，均已控制在 8 以内（`scripts/` 恰好 8 个，是上限，后续新增脚本必须先合并或建子目录）。
-> 2. **根目录文件数 = 6**（`.env.example`、`.gitignore`、`docker-compose.yml`、`README.md`、`AI_USAGE.md`、`自评.md`）。`backend/`、`frontend/`、`scripts/`、`data/`、`docs/`、`evals/`、`logs/` 都是**目录**，不计入根目录文件数；新增 `evals/` 不改变这个数字。
+> 2. **根目录文件数 = 7**（`.env.example`、`.gitignore`、`.gitattributes`、`docker-compose.yml`、`README.md`、`AI_USAGE.md`、`自评.md`）。`backend/`、`frontend/`、`scripts/`、`data/`、`docs/`、`evals/`、`logs/` 都是**目录**，不计入根目录文件数；新增 `evals/` 不改变这个数字。
+>    🔁 **M0 修订：6 → 7**。新增 `.gitattributes` 是为锁死 `*.sh` 的 `eol=lf`——实测编辑器在 Windows 下写出的 `.sh` 全是 CRLF，`bash x.sh` 侥幸能跑，但 `./x.sh` 会因 shebang 变成 `/usr/bin/env bash\r` 报 **bad interpreter**，且 M10 的 Docker（Linux）里必挂。7 仍在 ≤8 的合规范围内。
 > 3. **`scripts/check_limits.sh` 的统计范围是代码文件**（`.py` / `.ts` / `.tsx` / `.js` / `.jsx`）。截图、录屏、`.md` 语料、`.pdf` / `.docx` 等**资源与文档文件不计入**——否则 `docs/screenshots/` 放十几张验收截图就会误报超限。行数限制同理只作用于代码文件。
+> 4. **`__init__.py` 不计入「目录直接文件数」**（本节开头已明示），但**仍受 500 行上限约束**——`check_limits.sh` 已按此实现。同理 `.gitkeep` 不计入（非代码文件）。
+> 5. 🔴 **`backend/tests/` 必须按 §10.1 的 L1/L2/L3 拆子目录**（M0 执行时发现并修正的 TDD 内部冲突）：§10.1 列出 **16 个测试文件 + `conftest.py` = 17 个**，若平铺在 `backend/tests/` 下会**直接违反 FR-6-17**（超限 2 倍，`check_limits.sh` 上线第一天就红）。拆分后：`tests/unit/` 8 个（**正好卡上限**）、`tests/integration/` 6 个、`tests/e2e/` 2 个，`conftest.py` 留在 `tests/` 根（该目录直接文件数 = 1）。⚠️ `tests/unit/` 已达 8 的上限，后续新增单元测试**必须先建子目录**（同 R12 对 `scripts/` 的约束）。
 
 ### 3.1 分层依赖规则（单向，禁止反向依赖）
 
@@ -421,7 +428,7 @@ class Settings(BaseSettings):
     # ── LLM ────────────────────────────────────────────────
     llm_provider: Literal["openai_compat", "mock"] = "openai_compat"
     llm_api_key: SecretStr                          # 必填，SecretStr 保证 repr/日志不泄露
-    llm_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    llm_base_url: str = "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"  # 🔴 §1.3 实测：这把 key 是 token-plan 专用，打标准 dashscope 返回 401，故默认值不能用 dashscope
     llm_model: str = "qwen3.8-max"                    # 实测可用；同 key 备选 qwen3.8-flash / deepseek-v4-pro / glm-5.3
     llm_temperature: float = 0.1                    # 问答场景压低随机性
     llm_timeout_s: float = 30.0
@@ -1270,6 +1277,8 @@ GET /api/documents/{doc_id}/content → 拿到全文 content
 > 题目要求：**≥3 条自动化测试，其中 ≥1 条使用 Mock LLM，不依赖真实 API**（FR-6-09）。实际按 **40+ 条**规划，`./scripts/test.sh` 一键全跑，**断网可过**。
 
 ### 10.1 测试分层与清单
+
+> 📁 **目录约定（M0 落定）**：下表三层分别落在 `backend/tests/unit/`、`backend/tests/integration/`、`backend/tests/e2e/`，`conftest.py` 在 `backend/tests/` 根。**不得平铺**——17 个文件会违反「单目录 ≤8 文件」（FR-6-17）。详见 §3 目录约定第 5 条。
 
 **L1 纯单元测试（无 IO，最快，占 60%）**
 
