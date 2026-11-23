@@ -60,6 +60,11 @@ def mock_settings(tmp_path: Path) -> Settings:
         llm_api_key="sk-test-1",
         log_dir=tmp_path / "logs",
         storage_dir=tmp_path / "storage",
+        # 🔴 必须显式指定：Settings 的 resolve_paths 把相对路径锚定到仓库根，
+        # 只给 storage_dir 不会带动 sqlite_path / chroma_dir，漏写就会把测试
+        # 数据写进真实的仓库 storage/ 目录。
+        sqlite_path=tmp_path / "storage" / "test.db",
+        chroma_dir=tmp_path / "storage" / "chroma",
         mock_data_dir=MOCK_DATA_DIR,
     )
 

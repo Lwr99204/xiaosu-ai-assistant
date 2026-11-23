@@ -12,18 +12,28 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.agent.orchestrator import build_orchestrator
 from app.api.middleware import RequestContextMiddleware, install_exception_handlers
 from app.config import Settings, get_settings
+from app.db.repositories import MessageRepo
+from app.im.base import IMAdapter
+from app.im.runner import IMRunner
+from app.im.session import MessageDeduper
+from app.im.wecom import WeComAdapter
+from app.llm.factory import build_chat_provider
 from app.logging_setup import setup_logging
 from app.mock_api.repository import get_store
 from app.mock_api.router import router as mock_router
 from app.schemas.health import HealthComponent, HealthResponse, ImHealth, WecomHealth
+from app.services.agent_service import AgentService
+from app.tools import build_tool_registry
 
 logger = logging.getLogger(__name__)
 
@@ -32,13 +42,58 @@ APP_TITLE = "小苏 · 公司内部 AI 助手"
 #: 与 backend/pyproject.toml 的 version 保持一致；健康检查与前端页脚共用
 APP_VERSION = "0.1.0"
 
-#: M1 阶段尚未接线的组件，统一回 not_wired（预期状态，不是故障）
+#: 尚未接线的组件统一回 not_wired（预期状态，不是故障）
 _NOT_WIRED = "本阶段尚未接入"
+
+
+def build_agent_service(settings: Settings) -> AgentService:
+    """组装 Agent 的唯一入口，IM 与 Web API 共用（TDD §4.5.1）。
+
+    知识库检索器要到 M4 才有真向量库，此处传 None：search_knowledge_base 仍会
+    注册，只是回答「知识库当前不可用」，工具清单在各里程碑之间保持稳定。
+    """
+    registry = build_tool_registry(settings)
+    orchestrator = build_orchestrator(settings, build_chat_provider(settings), registry)
+    return AgentService(settings=settings, orchestrator=orchestrator)
+
+
+def _log_im_task_result(task: asyncio.Task[None]) -> None:
+    """长连接任务结束时记一条结果日志。
+
+    不加这个回调，任务里抛出的异常只会变成「Task exception was never retrieved」
+    警告，排查时看不到原因。取消属于正常关停，不当错误报。
+    """
+    if task.cancelled():
+        logger.info("企业微信 IM 任务已取消")
+        return
+    error = task.exception()
+    if error is not None:
+        logger.error("企业微信 IM 任务异常退出 type=%s", type(error).__name__)
+
+
+async def start_im(app: FastAPI, settings: Settings) -> WeComAdapter | None:
+    """按配置拉起企业微信长连接；未启用或缺凭证时返回 None，不阻塞其他功能。"""
+    if not (settings.wecom_enabled and settings.wecom_bot_id and settings.wecom_bot_secret):
+        logger.info("企业微信 IM enabled=%s，跳过长连接", settings.wecom_enabled)
+        return None
+    adapter = WeComAdapter(settings)
+    runner = IMRunner(
+        settings=settings,
+        service=app.state.agent_service,
+        adapter=adapter,
+        deduper=MessageDeduper(repo=MessageRepo(settings.sqlite_path)),
+    )
+    task = asyncio.create_task(adapter.start(runner.handle), name="wecom-im")
+    task.add_done_callback(_log_im_task_result)
+    app.state.im_adapter = adapter
+    app.state.im_task = task
+    logger.info("企业微信 IM 长连接已拉起")
+    return adapter
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """启动/关闭钩子。M3 起企业微信长连接在这里拉起与收尾。"""
+    """启动/关闭钩子：Agent 服务 + SQLite 会话库 + 企业微信长连接。"""
     settings: Settings = app.state.settings
     logger.info(
         "小苏后端启动 version=%s mock_data_dir=%s log_dir=%s",
@@ -46,30 +101,45 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings.mock_data_dir,
         settings.log_dir,
     )
-    logger.info("企业微信 IM enabled=%s", settings.wecom_enabled)
-    yield
-    logger.info("小苏后端关闭")
+    app.state.agent_service = build_agent_service(settings)
+    app.state.db_ready = True
+    adapter = await start_im(app, settings)
+    try:
+        yield
+    finally:
+        if adapter is not None:
+            await adapter.stop()
+        logger.info("小苏后端关闭")
 
 
-def build_health(settings: Settings) -> HealthResponse:
+def build_health(
+    settings: Settings,
+    *,
+    db_ready: bool = False,
+    adapter: IMAdapter | None = None,
+) -> HealthResponse:
     """组装健康检查响应。
 
-    后续里程碑把各组件换成真实探测（llm 探 base_url 可达性、embed 探 8001、
-    vector_store 探 Chroma、db 探 SQLite、im.wecom 读长连接心跳时间），
-    调用方与前端的契约不变。
+    M3 起 db 与 im.wecom 是真实探测（SQLite 已建表、长连接心跳时间）。llm /
+    embed / vector_store 仍回 not_wired：它们要到 M4 接本地向量服务与真实模型
+    探测。响应字段保持不变，前端与评审脚本不用改。
     """
+    wecom = adapter.health() if adapter is not None else None
     return HealthResponse(
         status="ok",
         version=APP_VERSION,
         llm=HealthComponent(status="not_wired", detail=_NOT_WIRED),
         embed=HealthComponent(status="not_wired", detail=_NOT_WIRED),
         vector_store=HealthComponent(status="not_wired", detail=_NOT_WIRED),
-        db=HealthComponent(status="not_wired", detail=_NOT_WIRED),
+        db=HealthComponent(
+            status="ok" if db_ready else "not_wired",
+            detail=str(settings.sqlite_path) if db_ready else _NOT_WIRED,
+        ),
         im=ImHealth(
             wecom=WecomHealth(
                 enabled=settings.wecom_enabled,
-                connected=False,
-                last_heartbeat=None,
+                connected=bool(wecom is not None and wecom.connected),
+                last_heartbeat=wecom.last_heartbeat if wecom is not None else None,
             )
         ),
     )
@@ -96,6 +166,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/health", response_model=HealthResponse, summary="健康检查")
     def health() -> HealthResponse:
-        return build_health(resolved)
+        return build_health(
+            resolved,
+            db_ready=bool(getattr(app.state, "db_ready", False)),
+            adapter=getattr(app.state, "im_adapter", None),
+        )
 
     return app
