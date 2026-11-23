@@ -89,11 +89,12 @@ M0 → M1 → M2 → M3 → M6 → M7 → M9(钉钉) → M12(验收)
 
 | 任务 | 何时做 | 谁做 | 阻塞什么 |
 |---|---|---|---|
-| **① 确定 LLM 供应商并拿到 API Key** | **Day 1** | 你（用户） | M5 之后的所有真实联调；无 key 只能跑 MockLLM |
+| **① 确定 LLM 供应商并拿到 API Key** | ✅ **Day 1 已完成** | 你（用户） | ~~M5 之后所有真实联调~~ → 凭证已到位，且 chat / tool_call / stream 三项**实测均 200**（TDD §1.3）。M5 不再被阻塞 |
+| **①-b 🔴 补一个 embedding 能力** | **立刻（阻塞 M3）** | 你（用户） | **M3 RAG 全部**。实测该 key **不提供任何 embedding 模型**（`/models` 23 个全量中无一），且打标准 DashScope 返回 **401**。二选一：**方案 A** 去阿里云百炼开一把普通 `sk-` Key 用 `text-embedding-v3`（约 5 分钟）；**方案 B** 改用本地 ONNX `bge-small-zh-v1.5`（我来实现，你无需操作）。详见 TDD §1.4 |
 | **② 注册钉钉开发者 → 创建企业内部应用 → 拿 AppKey/AppSecret** | **Day 1~2** | 你（用户） | **M9（15 分 + 淘汰项）** |
 | ③ 钉钉后台：开启 Stream 模式、添加机器人能力、配置权限 | Day 2 | 你（用户） | M9 |
 | ④ 建一个钉钉测试群、把机器人拉进群 | Day 2 | 你（用户） | M9 验收 |
-| ⑤ 准备第二个供应商 key（热备 + 多模型加分项） | Day 3+ | 你（用户） | M11、面试现场保险 |
+| ~~⑤ 准备第二个供应商 key（热备 + 多模型加分项）~~ | ❌ **已取消** | — | **不需要了**：实测同一把 token-plan key 就能用 qwen / deepseek / glm 三家共 16 个文本模型，M11 ②「多模型适配」零成本达成 |
 | ⑥ （可选）飞书开发者凭证 | M11 前 | 你（用户） | 加分项 |
 
 > 💡 **钉钉凭证获取路径**（无需真实公司）：用个人手机号在钉钉创建「**测试企业/团队**」→ 免费 → 自己就是管理员 → 进 [open-dev.dingtalk.com](https://open-dev.dingtalk.com) → 应用开发 → 企业内部应用 → 创建应用 → 「凭证与基础信息」页拿 **Client ID (AppKey)** 与 **Client Secret (AppSecret)** → 「机器人」能力页开启并选 **Stream 模式** → 发布应用 → 建群把机器人加进去。全程约 20 分钟。
@@ -321,18 +322,22 @@ bash scripts/test.sh
 **任务清单**
 - [ ] `app/llm/base.py`：`LLMProvider` Protocol、`ChatMessage`、`ToolCall`、`LLMResult`、`TokenUsage`、`ToolSpec`、`StreamChunk`
 - [ ] `app/llm/openai_compat.py`：基于 `openai.AsyncOpenAI(base_url=...)` 实现 `chat()`（含 `tools` / `stream`）与 `embed()`
+- [ ] 🔴 **流式请求默认携带 `stream_options={"include_usage": true}`**——实测该端点流式下 `usage` 恒为 `null`，不加则 `total_tokens / cost_cny` **静默落 0**（TDD §1.3 坑 2 / R15）
+- [ ] 🔴 **SSE 解析按 delta 字段名分流 `reasoning_content` 与 `content`**——实测 `qwen3.8-max` 是推理模型且 reasoning chunk **先于** content 到达，混拼会把英文思考过程直接吐给用户（TDD §1.3 坑 1 / R14）；`reasoning_content` 映射为 `{type:"reasoning"}` 帧供 Web 折叠展示，IM 侧忽略
 - [ ] `app/llm/factory.py`：按 `settings.llm_provider` 构建；**启动时做一次连通性自检**（`chat` 一条 "ping"），失败打印明确诊断（如「API Key 无效」/「base_url 不可达」）而非等到用户提问才炸
 - [ ] `app/llm/mock.py`：**MockLLMProvider**（脚本队列 + 确定性伪向量 embed），支持注入异常
-- [ ] `app/llm/tokenizer.py`：真实 usage 优先 → `tiktoken` 估算回退 → `PRICING` 单价表折算成本
+- [ ] `app/llm/tokenizer.py`：真实 usage 优先 → `tiktoken` 估算回退 → `PRICING` 单价表折算成本；🔴 **`reasoning_tokens` 必须计入输出侧成本**（实测已含在 `completion_tokens` 内、按输出单价计费）
 - [ ] `app/core/retry.py` 接入：仅对超时/5xx/429 重试，指数退避 0.5s→1s + 抖动，最多 2 次；4xx 直接抛
-- [ ] `.env.example` 补 5 家供应商的 `base_url` + `model` 注释样例（通义/智谱/DeepSeek/OpenAI/Ollama）
+- [ ] `.env.example` 填**实测可用**的供应商配置：token-plan 端点 + `qwen3.8-max`（默认），并把同 key 可用的 `qwen3.8-flash`（快/省）、`deepseek-v4-pro`、`glm-5.3` 作为注释备选——**多模型适配加分项零成本达成，无需第二家 key**
 - [ ] `app/api/settings.py`：`GET/PUT /api/settings/model`（FR-5-06，运行时切换模型）
 - [ ] 测试：`test_retry.py` 3 条、`test_tokenizer.py` 2 条、`test_llm_factory.py` 2 条
+- [ ] 🔴 **测试：`test_stream_usage.py`——断言流式路径 `total_tokens > 0`**，防止 R15 静默归零
+- [ ] 🔴 **测试：`test_reasoning_split.py`——构造「reasoning chunk 先到」的假 SSE 流，断言最终答案不含 `reasoning_content`**，防止 R14 回归
 
 **验收动作**
 ```bash
-# 真实 key 联调（若已拿到）
-curl -X PUT http://localhost:8000/api/settings/model -d '{"model_id":"qwen-plus"}' -H 'Content-Type: application/json'
+# 真实 key 联调（凭证已到位，实测 chat / tool_call / stream 均 200）
+curl -X PUT http://localhost:8000/api/settings/model -d '{"model_id":"qwen3.8-flash"}' -H 'Content-Type: application/json'
 cd backend && uv run python -c "
 import asyncio; from app.llm.factory import build_provider
 from app.llm.base import ChatMessage
@@ -582,7 +587,7 @@ git log -p | grep -icE "sk-[A-Za-z0-9]{16,}"   # 输出 0
 
 **任务清单（按性价比排序，每项可独立提交、独立砍掉）**
 - [ ] **① Token 计数与成本展示**：`/api/logs/stats` 增加当日/累计成本；前端 `/logs` 顶部加统计卡片（数据在 M5/M7 已落库，此处仅做展示）
-- [ ] **② 多模型适配验证**：用第二家供应商（如智谱 GLM）跑通全部验收题；`.env.example` 补两套配置注释；README 加「切换模型」小节 + 对比表（模型 / 正确率 / 平均耗时 / 单次成本）
+- [ ] **② 多模型适配验证**：✅ **已实测确认零成本**——同一把 token-plan key 即可用 `qwen3.8-max` / `qwen3.8-flash` / `deepseek-v4-pro` / `glm-5.3`（TDD §1.3）。用 `qwen3.8-flash` 与 `deepseek-v4-pro` 各跑通全部验收题；README 加「切换模型」小节 + 对比表（模型 / 正确率 / 平均耗时 / 单次成本 / 是否推理模型）
 - [ ] **③ Evals 自动化评测**：`evals/cases.yaml`（≥20 case）+ `evals/run_evals.py` + 生成 `evals/report.md`；默认跑 Mock 版，`--live` 跑真实模型
   - `evals/` 是**根目录下的新目录**（TDD §3 已登记）。目录**不计入**根目录「6 个文件」的约束，新增它不改变该数字；`evals/` 内 3 个文件也远低于 8 的上限
   - `report.md` 由脚本生成并**入库**，作为加分项的可验证证据

@@ -58,6 +58,61 @@
 
 千级分块规模下 numpy 暴力余弦相似度 <10 ms，技术上完全够用。但选 ChromaDB 是因为：**按 `doc_id` 删除分块**是 FR-1-05 / FR-1-06（增量更新、删除生效）的硬需求，自研要额外维护 id→向量 的映射与持久化，反而更复杂。同时用 `VectorStore` Protocol 封装，保留替换能力（见 §14 ADR-03）。
 
+### 1.3 ⚠️ 供应商实测结论（2026-11-23，凭证到手当日实测）
+
+拿到「阿里云 MaaS token-plan」端点（`https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`）与 `qwen3.8-max` 后，先用 `curl` 做了 5 项探测。**结论直接改写了本节设计**：
+
+| # | 探测项 | 结果 | 影响 |
+|---|---|---|---|
+| 1 | `GET /models` | **200**，返回 23 个模型（`has_more=false`，即全量） | 可用模型见下方清单；**列表中没有任何 embedding 模型** |
+| 2 | `POST /embeddings`（试 `text-embedding-v3` / `v4` / `v1`） | **404 `model_not_found`** ×3 | 🔴 **RAG 向量化无云端方案**，必须换路线（见 §1.4） |
+| 3 | 同一把 key 打标准 DashScope（`dashscope.aliyuncs.com`） | **401 `invalid_api_key`** | 该 key 是 token-plan 专用，**不能**跨端点复用 |
+| 4 | **Function Calling**（`query_employee`） | **200，完全可用** ✅ | M6 的「模型驱动工具编排」成立。实测「员工001是哪个部门的」→ `finish_reason="tool_calls"`、`arguments={"emp_id":"001"}`，**ID 抽取正确** |
+| 5 | **流式 SSE**（`stream=true`） | **200，完全可用** ✅ | M7 成立。但 chunk 结构有两个坑，见下 |
+
+**可用模型清单**（实测）：`qwen3.8-max`、`qwen3.8-flash`、`qwen4-max`、`qwen4-max-preview`、`qwen3.7-max`、`qwen3.7-plus`、`qwen3.6-flash`、`deepseek-v4-pro`、`deepseek-v4-pro-0813`、`deepseek-v4-flash-0731`、`deepseek-v4.1-flash`、`deepseek-v4.1-flash-1017`、`glm-5.2`、`glm-5.3`、`auto`、`decision-model-preview`，以及图像（`wan2.7-image*`、`qwen-image-3.0-pro`）、音频（`qwen-audio-3.0-*`）、视频（`wan3.0-video`）。
+
+> 🎁 **意外收获**：多模型适配加分项（M11 ②）**零成本达成**——同一把 key 即可在 qwen / deepseek / glm 三家之间切换，无需再申请第二个供应商。原计划中「准备第二家 key 作热备」的人工任务可以取消。
+
+**🔴 坑 1：`qwen3.8-max` 是推理模型，响应携带 `reasoning_content`**
+
+实测非流式响应体（工具调用场景）：
+```json
+{"message":{"role":"assistant","reasoning_content":"The user asks which department...","content":"","tool_calls":[...]},
+ "usage":{"prompt_tokens":323,"completion_tokens":51,"total_tokens":374,
+          "completion_tokens_details":{"reasoning_tokens":20,"text_tokens":51}}}
+```
+
+流式下 **`delta.reasoning_content` 的 chunk 先于 `delta.content` 到达**（实测首个数据帧就是 reasoning）。因此：
+
+- **SSE 解析器必须把 `reasoning_content` 与 `content` 分开处理**，只把 `content` 拼进最终答案。否则钉钉里会先吐出一大段英文思考过程，直接毁掉验收题 7.1 的观感。
+- `reasoning_content` 不丢弃：映射为新帧 `{type:"reasoning", content:"…"}`，Web `/chat` 页折叠展示（工程细节加分素材）；**IM 侧忽略**。
+- **成本计算必须把 `reasoning_tokens` 计入**（它已包含在 `completion_tokens` 内、按输出单价计费），否则 FR-5-10 的成本会系统性偏低。
+- 推理模型延迟更高 → **反向验证了 FR-4-10「🤔 正在查阅…」占位与 60 s 硬超时是必需品**，不是过度设计。
+
+**🔴 坑 2：流式模式下 `usage` 恒为 `null`**
+
+实测每个 chunk 都是 `"usage":null`，终止 chunk 也不带用量。OpenAI 兼容协议下需在请求体加 `stream_options: {"include_usage": true}`，服务端才会在最后一个 chunk 补发 usage。
+
+→ `LLMProvider` 的**流式请求必须默认带上该参数**。否则流式路径（IM 与 Web **都是**流式）拿不到 token 数，`conversations.total_tokens / cost_cny` 会全部落 0，FR-5-10 与后台日志的成本列静默失效。**这是最容易漏、且漏了不报错只静默归零的坑。**
+
+
+### 1.4 🔴 待决：Embedding 方案（当前唯一硬阻塞）
+
+**问题**：探测 2 + 3 证明——**手上这把 key 拿不到任何云端 embedding 能力**，而 RAG（M3）的向量化环节必须有 embedding。这是当前唯一的硬阻塞；其余设计（Agent / 工具 / 流式 / IM / 后台）均不受影响，可按计划推进。
+
+| 方案 | 做法 | 优点 | 代价 | 评价 |
+|---|---|---|---|---|
+| **A. 再申请一把标准 DashScope Key** | 阿里云百炼控制台开一个普通 API Key（`sk-` 开头，**不是** `sk-sp-`），用 `text-embedding-v3`（1024 维）或 `v4` | 与原设计完全一致、零改动；中文效果最好；近乎免费 | 需你再去控制台操作一次（约 5 分钟） | ⭐ **首选** |
+| **B. 本地 ONNX 中文 embedding** | `onnxruntime` + `bge-small-zh-v1.5`（~95 MB），封一个 `LocalEmbeddingProvider` 实现同一个 Protocol | **完全离线、零调用成本**；面试现场断网也能演示 RAG（反而是亮点）；与 ChromaDB 同进程，部署更简单 | 首次需下载模型；`setup.sh` 变重；需自行处理 tokenizer 与归一化 | ⭐ **兜底首选** |
+| C. `sentence-transformers` + BGE | 同 B 但走 PyTorch | 生态成熟、代码最少 | **拖入 torch ~2 GB+**，`.venv` 巨大、安装极慢，与「轻量」目标冲突 | ❌ 否决 |
+| D. ChromaDB 默认 embedding | `DefaultEmbeddingFunction()`（`all-MiniLM-L6-v2`） | 零配置开箱即用 | **英文模型，中文检索质量差**；制度类中文文档命中率明显偏低 → 直接拖累 RAG 那 18 分 | ❌ 否决 |
+| E. 放弃向量、纯 BM25 | — | 无任何依赖 | 题目明确要求向量数据库，**会失分** | ❌ 否决 |
+
+> **无论最终选 A 还是 B，`EmbeddingProvider` 都必须是 Protocol 抽象**（TDD 原设计已有），两者**可以共存**：`.env` 中用 `EMBEDDING_PROVIDER=openai|local` 一键切换。这样即使现场网络异常，也能立刻切到本地 embedding 继续演示——**这条容错路径本身就值得写进 `自评.md` 的技术亮点**。
+>
+> 注：若选 B，`docs/DEV_PLAN.md` M3 需增加「下载 ONNX 模型」一步；`backend/app/rag/embedding.py` 从单实现变为双实现（仍满足 ≤500 行，必要时拆 `embedding_local.py`）。
+
 ---
 
 ## 2. 总体架构
@@ -134,11 +189,16 @@ POST /api/documents (multipart)
 **流 C：Web 后台调试聊天（SSE 流式，对应 FR-2-07）**
 ```
 POST /api/chat/stream → SSE 逐帧推送，帧类型固定为：
-  {type:"delta",     content:"…"}                  # 增量文本
+  {type:"reasoning", content:"…"}                   # 推理模型的思考过程（Web 折叠展示，IM 忽略）
+  {type:"delta",     content:"…"}                   # 增量文本（真正答案）
   {type:"tool_call", name, arguments, duration_ms}  # 工具调用可视化
   {type:"citations", items:[…]}                     # 引用（带字符偏移，可高亮）
-  {type:"usage",     prompt_tokens, completion_tokens, total_tokens, cost}
+  {type:"usage",     prompt_tokens, completion_tokens, reasoning_tokens, total_tokens, cost}
   {type:"done"} | {type:"error", code, message}     # 终止帧，必达（FR-4-09）
+
+# ⚠️ 实测约束（TDD §1.3）：上游 qwen3.8-max 的 reasoning chunk 先于 content 到达，
+#    故 Provider 层必须按 delta 字段名分流，不可无脑拼接；
+#    且流式请求必须带 stream_options={"include_usage": true}，否则 usage 帧永远为 0。
 ```
 
 ---
@@ -1234,6 +1294,10 @@ services:
 | R10 | **钉钉普通消息不可编辑**，占位后无法「原地更新」为正式答案 | **已确认必然发生** | 🟠 影响 FR-4-10 实现方式 | 定稿为「占位 + 追加」**两条消息**方案（§4.6.3 方案 A）；单卡片流式刷新降为 P2 加分项，M11 视时间做，且需提前申请卡片模板 ID |
 | R11 | 截图、录屏、语料等**资源文件触发 `check_limits.sh` 误报超限** | 中 | 🟠 底线自查假阳性 | 脚本统计范围限定为代码文件（§3 约定 3）；资源统一放 `docs/screenshots/`；该约定写进 README「工程规范」小节，避免评审歧义 |
 | R12 | `scripts/` 已达 **8 文件上限**，后续想加脚本即超限 | 中 | 🟠 底线失分 | 新增脚本前先尝试合并（如 `acceptance_check.sh` 并入 `test.sh --acceptance`）；确需新增则建 `scripts/dev/` 子目录 |
+| **R13** | 🔴 **实测确认：token-plan 端点不提供任何 embedding 模型（`/models` 23 个全量中无一），且该 key 打标准 DashScope 返回 401** | **高 · 阻塞 M3** | 已探测 5 项并记录于 TDD §1.3 / §1.4；`EmbeddingProvider` 做成 Protocol，支持「云端 API」与「本地 ONNX（`bge-small-zh-v1.5`）」双实现，`.env` 用 `EMBEDDING_PROVIDER` 一键切换；**待你在方案 A / B 间拍板** |
+| **R14** | 🔴 **实测确认：`qwen3.8-max` 是推理模型，流式下 `reasoning_content` chunk 先于 `content` 到达** | 中 | SSE 解析器分离两类 delta，仅 `content` 进答案；`reasoning_content` 映射为 `{type:"reasoning"}` 帧供 Web 折叠展示、IM 忽略。**否则钉钉会输出英文思考过程** |
+| **R15** | 🔴 **实测确认：流式模式下 `usage` 恒为 `null`** | 中 | 流式请求默认携带 `stream_options={"include_usage": true}`；M5 增加断言测试「流式路径 `total_tokens > 0`」，防止成本字段**静默落 0** |
+
 
 ---
 
@@ -1257,6 +1321,9 @@ services:
 | **ADR-12** | **前端上传状态用轮询而非 WebSocket** | 秒级低频变更，轮询足够且实现简单 | 有 1.5 s 延迟，可接受 |
 | **ADR-13** | **IM 占位消息采用「占位 + 追加」两条消息，不做原地编辑** | 钉钉普通消息 SDK 不支持编辑已发送内容（R10 已确认）。两条消息实现成本最低、无额外凭证依赖 | 失败场景下用户会看到两条消息；卡片流式刷新（更好的体验）延后到 M11 作为加分项 |
 | **ADR-14** | **`check_limits.sh` 只统计代码文件**（`.py/.ts/.tsx/.js/.jsx`），资源与文档不计入 | 题目原意是约束**代码**可读性；截图/语料若计入会导致验收材料越多越「超限」的荒谬结果 | 需在 README 显式说明该约定，避免评审者按不同口径复核（已列入 M12 任务） |
+| **ADR-15** | **`EmbeddingProvider` 独立于 `LLMProvider`，做成可热切换的双实现（云端 API / 本地 ONNX）** | 🔴 由实测倒逼：拿到的 token-plan 端点**不提供任何 embedding 模型**，且该 key 打标准 DashScope 返回 401（§1.3 探测 2、3）。若把 embed 与 chat 绑死在同一个 client 上，M3 会直接卡死 | 多写一个 ~120 行的本地实现 + 首次需下载 ~95 MB 模型。**但换来一条宝贵的容错路径**：现场断网时可 `EMBEDDING_PROVIDER=local` 立即切换继续演示 RAG |
+| **ADR-16** | **推理模型的 `reasoning_content` 显式建模为一等公民（独立 SSE 帧 `{type:"reasoning"}`），而非解析时丢弃** | 实测 `qwen3.8-max` 是推理模型且 reasoning chunk **先于** content 到达（§1.3 坑 1）。显式建模才能：① 保证答案不被污染；② Web 端可折叠展示思考过程（工程细节加分）；③ `reasoning_tokens` 能被正确计入成本 | 帧协议多一种类型，前端与 IM 都要显式声明「忽略 reasoning」 |
+
 
 ---
 
