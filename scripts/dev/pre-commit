@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+# ═══════════════════════════════════════════════════════════════════════
+# pre-commit — 密钥扫描（FR-6-04 **淘汰项**）+ 工程规模门禁（FR-6-17）
+#
+# 安装：bash scripts/setup.sh  会自动复制到 .git/hooks/pre-commit 并 chmod +x
+#       （.git/hooks/ 本身不入库，故源文件存放在 scripts/dev/ 下）
+# 紧急绕过：SKIP_SECRETS=1 git commit ...（仅在确认误报时使用）
+#
+# ─────────────────────────────────────────────────────────────────────
+# 🔴 一处对 DEV_PLAN M0 原文的**有意偏离**，必须说明：
+#
+# 原文要求扫描正则 `wecom.*secret` / `bot_secret`。若**照字面**实现，
+# 会命中大量合法代码从而让钩子完全不可用，例如：
+#   · backend/app/config.py    → `wecom_bot_secret: SecretStr | None = None`
+#   · docs/TDD.md §4.1         → 同上的字段声明与说明
+#   · .env.example             → `WECOM_BOT_SECRET=your-wecom-bot-secret`
+# 这些都是**类型声明或占位符**，不是泄露。
+#
+# 因此本钩子把规则收紧为「**该名字被赋了一个像真密钥的值**」，判据两条：
+#   ① 值长度 ≥20 且至少包含 2 类字符（小写/大写/数字）——真 key 必然混合，
+#      而 `SecretStr`(9)、`your-wecom-bot-secret`(全小写) 都不满足
+#   ② 不在占位符白名单内（your-/xxx/</changeme/not-needed/…）
+# `sk-[A-Za-z0-9]{16,}` 因前缀本身已足够明确，保留为**无条件硬拦**。
+# ─────────────────────────────────────────────────────────────────────
+set -uo pipefail   # 不用 -e：grep 无匹配返回 1 属正常，需自行汇总
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+cd "$REPO_ROOT" || exit 1
+
+red()    { printf '\033[31m%s\033[0m\n' "$*"; }
+green()  { printf '\033[32m%s\033[0m\n' "$*"; }
+yellow() { printf '\033[33m%s\033[0m\n' "$*"; }
+
+# ── 规则定义 ──────────────────────────────────────────────────────────
+# 硬拦：sk- 前缀的真实 API Key
+RE_HARD='sk-[A-Za-z0-9]{16,}'
+
+# 需配合熵判定的「密钥名」集合（覆盖 wecom.*secret / bot_secret / 常见 token）
+RE_KEYNAME='(api[_-]?key|apikey|secret[_-]?key|private[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|password|passwd|wecom[_a-z0-9]*secret|bot[_-]?secret|corp[_-]?secret|app[_-]?secret|encoding[_-]?aes[_-]?key)'
+RE_ASSIGN="${RE_KEYNAME}[\"']?[[:space:]]*[:=][[:space:]]*[\"']?[A-Za-z0-9_./+-]{20,}"
+
+# 占位符白名单：命中即视为样例值，放行
+RE_PLACEHOLDER='(your[-_]|xxxx|<[^>]*>|changeme|change_me|placeholder|not-needed|not_needed|dummy|example|replace|todo|none|null|true|false|secretstr|\{\{|\$\{)'
+
+# 不扫描的路径：锁文件（含大量合法长哈希）与二进制资源
+RE_SKIP_PATH='(^|/)(uv\.lock|pnpm-lock\.yaml|package-lock\.json|yarn\.lock|poetry\.lock)$|\.(png|jpg|jpeg|gif|webp|mp4|svg|ico|pdf|docx|woff2?|ttf|bin|safetensors)$'
+
+FINDINGS=0
+
+# 熵判定：长度 ≥20 且至少 2 类字符（小写/大写/数字）才算「像真密钥」
+looks_like_secret() {
+  printf '%s' "$1" | awk '{
+    v = $0; c = 0
+    if (v ~ /[a-z]/) c++
+    if (v ~ /[A-Z]/) c++
+    if (v ~ /[0-9]/) c++
+    exit (length(v) >= 20 && c >= 2) ? 0 : 1
+  }'
+}
+
+# 脱敏显示：只留首 4 末 2，避免把真密钥打到终端/CI 日志里
+mask() {
+  local v="$1" n=${#1}
+  if [ "$n" -le 8 ]; then printf '%s' "${v:0:2}****"; else printf '%s****%s' "${v:0:4}" "${v: -2}"; fi
+}
+
+# ── 步骤 1/3：密钥扫描 ────────────────────────────────────────────────
+if [ "${SKIP_SECRETS:-0}" = "1" ]; then
+  yellow "⚠ SKIP_SECRETS=1 —— 已跳过密钥扫描（请确认确为误报）"
+else
+  staged="$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null || true)"
+  staged="$(printf '%s\n' "$staged" | grep -Ev "$RE_SKIP_PATH" || true)"
+
+  if [ -n "$staged" ]; then
+    while IFS= read -r path; do
+      [ -z "$path" ] && continue
+      # 读**暂存区**内容而非工作区：两者可能不同，要扫的是即将提交的那份
+      content="$(git show ":$path" 2>/dev/null)" || continue
+      [ -z "$content" ] && continue
+
+      # ① 硬规则：sk-xxxx
+      while IFS= read -r hit; do
+        [ -z "$hit" ] && continue
+        red "🔑 疑似真实 API Key  ${path}:${hit%%:*}  →  $(mask "${hit#*:}")"
+        FINDINGS=$((FINDINGS + 1))
+      done <<< "$(printf '%s\n' "$content" | grep -nEo "$RE_HARD" || true)"
+
+      # ② 赋值型：密钥名 = 长值，再过占位符白名单与熵判定
+      while IFS= read -r hit; do
+        [ -z "$hit" ] && continue
+        lineno="${hit%%:*}"
+        matched="${hit#*:}"
+        value="$(printf '%s' "$matched" | sed -E 's/.*[:=][[:space:]]*["'"'"']?//')"
+        [ -z "$value" ] && continue
+        printf '%s' "$value" | grep -qiE "$RE_PLACEHOLDER" && continue
+        looks_like_secret "$value" || continue
+        red "🔑 疑似硬编码密钥  ${path}:${lineno}  →  ${matched%%[=:]*}=$(mask "$value")"
+        FINDINGS=$((FINDINGS + 1))
+      done <<< "$(printf '%s\n' "$content" | grep -inEo "$RE_ASSIGN" || true)"
+    done <<< "$staged"
+  fi
+fi
+
+# ── 步骤 2/3：工程规模门禁 ────────────────────────────────────────────
+# 注：扫的是工作区（非暂存区快照）——门禁关注的是仓库最终形态，可接受
+# SKIP_LIMITS=1 可跳过本步（例如纯文档提交、或需要单独调试密钥扫描时）；
+# 规模门禁在 M10 还会由 pre-push 钩子无条件再跑一次，故此处可跳过不削弱整体防线。
+if [ "${SKIP_LIMITS:-0}" = "1" ]; then
+  yellow "⚠ SKIP_LIMITS=1 —— 已跳过规模门禁（pre-push 仍会再查）"
+elif [ -f "$REPO_ROOT/scripts/check_limits.sh" ]; then
+  if ! bash "$REPO_ROOT/scripts/check_limits.sh"; then
+    FINDINGS=$((FINDINGS + 1))
+  fi
+fi
+
+# ── 步骤 3/3：结论 ────────────────────────────────────────────────────
+if [ "$FINDINGS" -gt 0 ]; then
+  red ""
+  red "❌ pre-commit 拦截：发现 $FINDINGS 处问题，提交已中止"
+  red ""
+  red "   密钥泄露是本题的**淘汰项**（FR-6-04）。处理方式："
+  red "     1. 把真实值移到 .env（已被 .gitignore 忽略），代码里只留占位符"
+  red "     2. 若已误提交过，仅删除是不够的 —— 需 git filter-repo 清历史"
+  red "        并**立即作废轮换该凭证**（GitHub 上的历史 commit 可被爬取）"
+  red "     3. 确认是误报：SKIP_SECRETS=1 git commit ...（仅限密钥扫描部分）"
+  exit 1
+fi
+
+green "✅ pre-commit 通过（密钥扫描 + 规模门禁）"
+exit 0
