@@ -36,7 +36,7 @@
 - **重点记录 4 类素材**（这是拿高分的关键，不是记录「我用了 AI 很开心」）：
   1. **AI 给的错误/次优方案 + 我如何发现**（最能体现驾驭力）
   2. **我如何拆解任务让 AI 产出可用代码**（prompt 策略）
-  3. **AI 完全帮不上、必须我自己搞定的部分**（如钉钉凭证申请、阈值调参的判断）
+  3. **AI 完全帮不上、必须我自己搞定的部分**（如企业微信智能机器人凭证申请、阈值调参的判断）
   4. **我用什么方法验证 AI 的输出**（单测 / Evals / 手工验收题）
 
 ### 铁律 3：每个里程碑结束必须「可运行 + 可验证」
@@ -60,12 +60,12 @@
 | **M6** | **工具系统 + Agent 编排** | 工具注册中心、6 个工具、Function Calling 循环、三层拒答 | FR-3-01~03/06~11、FR-2-08/09 | 5 | M3+M5 |
 | **M7** | 问答链路打通（Web SSE） | `/api/chat/stream`、SSE 帧协议、会话上下文、多轮记忆 | FR-2-02/04~07/12 | 4 | M6 |
 | **M8** | Web 管理后台 | Next.js 4 个页面：文档/日志/设置/调试聊天 | FR-5-01~10 | 5 | M4+M7 |
-| **M9** | ⭐ **钉钉 IM 集成** | Stream 长连接、adapter 抽象、会话隔离、兜底话术、Markdown 引用 | **FR-4-01~12/15（15 分 + 淘汰项）** | 4 | M7 |
+| **M9** | ⭐ **企业微信 IM 集成** | 连通性 spike、智能机器人 WebSocket 长连接、adapter 抽象、会话隔离、**原生流式打字机回复**、兜底话术、Markdown 引用与 4000 字分段 | **FR-4-01~12/15（15 分 + 淘汰项）+ FR-4-14 提前达成** | 5 | M7 |
 | **M10** | 工程化收尾与质量门禁 | 测试补齐至 40+、`test.sh`/`lint.sh`/`check_limits.sh` **完整实现**、Docker | **FR-6-01（最终验收）**/09/10/13~18 | 3 | 全部 |
 | **M11** | 加分项 | Token 成本展示、多模型验证、飞书第二 adapter、Evals 20+ case | 加分 4 项 | 4 | M10 |
 | **M12** | 文档收尾与验收交付 | README 完整版+截图、`AI_USAGE.md`、`自评.md`、`ACCEPTANCE.md`、验收全过 | FR-6-11、AI_USAGE 15 分 | 4 | 全部 |
 
-**总计约 53 个 commit**，远超「不能只有一个 init commit」的要求。
+**总计约 54 个 commit**，远超「不能只有一个 init commit」的要求。
 
 ---
 
@@ -74,12 +74,12 @@
 ### 2.1 关键路径（决定最短工期）
 
 ```
-M0 → M1 → M2 → M3 → M6 → M7 → M9(钉钉) → M12(验收)
+M0 → M1 → M2 → M3 → M6 → M7 → M9(企微) → M12(验收)
               ↘ M4 ↗        ↗
         M5 ────────────────┘
 ```
 
-- **最长链**：`M0→M1→M2→M3→M6→M7→M9→M12`。M9（钉钉）在关键路径末端，**这是最大风险点**（15 分 + 淘汰项，且依赖外部凭证）。
+- **最长链**：`M0→M1→M2→M3→M6→M7→M9→M12`。M9（企业微信）在关键路径末端，**这是最大风险点**（15 分 + 淘汰项，且依赖外部凭证）。
 - **M5（LLM 层）可与 M3/M4 并行**：它只依赖 M1 的配置层，不依赖 RAG。
 - **M8（前端）可与 M9 并行**：都只依赖 M7 打通的问答链路。
 
@@ -91,13 +91,19 @@ M0 → M1 → M2 → M3 → M6 → M7 → M9(钉钉) → M12(验收)
 |---|---|---|---|
 | **① 确定 LLM 供应商并拿到 API Key** | ✅ **Day 1 已完成** | 你（用户） | ~~M5 之后所有真实联调~~ → 凭证已到位，且 chat / tool_call / stream 三项**实测均 200**（TDD §1.3）。M5 不再被阻塞 |
 | **①-b embedding 能力** | ✅ **已解决 · 无需你操作** | — | ~~阻塞 M3 RAG 全部~~ → **已解除**。复用你本机已有的 **BGE-M3 独立服务**（`http://127.0.0.1:8001/v1/embeddings`，OpenAI 兼容）。实测 `dim=1024`、`L2norm=1`、批量 4 条 278 ms(GPU)、语义排序正确（命中 0.71 vs 不相关 0.48）。**唯一要求**：演示 / 联调前确保该服务已启动——M0 会把服务代码副本收进 `backend/dev_tools/`，backend 启动时自检 `/health` 并给出可操作提示（TDD §1.4 / R17） |
-| **② 注册钉钉开发者 → 创建企业内部应用 → 拿 AppKey/AppSecret** | **Day 1~2** | 你（用户） | **M9（15 分 + 淘汰项）** |
-| ③ 钉钉后台：开启 Stream 模式、添加机器人能力、配置权限 | Day 2 | 你（用户） | M9 |
-| ④ 建一个钉钉测试群、把机器人拉进群 | Day 2 | 你（用户） | M9 验收 |
+| **② 注册/登录企业微信 → 创建「智能机器人」→ 拿 `bot_id` + `secret`** | **Day 1（🔴 最优先）** | 你（用户） | **M9（15 分 + 淘汰项）** |
+| ③ 企业微信后台：确认「智能机器人」功能**是否对本企业开放**、配置可见范围与 `allowedUserIds` 白名单 | Day 1~2 | 你（用户） | M9 ——🔴 **这是 R1 的首要未知项，可能要求企业认证，务必第一时间去点一遍** |
+| ④ 建一个企业微信测试群、把智能机器人加进群 | Day 2 | 你（用户） | M9 验收 |
 | ~~⑤ 准备第二个供应商 key（热备 + 多模型加分项）~~ | ❌ **已取消** | — | **不需要了**：实测同一把 token-plan key 就能用 qwen / deepseek / glm 三家共 16 个文本模型，M11 ②「多模型适配」零成本达成 |
 | ⑥ （可选）飞书开发者凭证 | M11 前 | 你（用户） | 加分项 |
 
-> 💡 **钉钉凭证获取路径**（无需真实公司）：用个人手机号在钉钉创建「**测试企业/团队**」→ 免费 → 自己就是管理员 → 进 [open-dev.dingtalk.com](https://open-dev.dingtalk.com) → 应用开发 → 企业内部应用 → 创建应用 → 「凭证与基础信息」页拿 **Client ID (AppKey)** 与 **Client Secret (AppSecret)** → 「机器人」能力页开启并选 **Stream 模式** → 发布应用 → 建群把机器人加进去。全程约 20 分钟。
+> 💡 **企业微信凭证获取路径**（无需真实公司，对应 TDD §1.5）：用个人手机号在 [work.weixin.qq.com](https://work.weixin.qq.com) 免费注册一个「企业/团队」→ 自己即管理员 → 登录**管理后台** → 找到 **「智能机器人」**（注意：**不是**「应用管理 → 自建应用」，那条路要公网回调 URL，已被否决）→ 创建机器人 → 取 **`bot_id`** 与 **`secret`** 两项 → 配置可见范围/白名单 → 建群把机器人加进去。
+>
+> 🔴 **两个必须先验证的前置项**（Day 1 就做，别拖到 M9）：
+> 1. **「智能机器人」入口是否存在**。该功能可能要求企业完成认证，或对未认证企业不开放。**若你的企业微信后台找不到这个入口，立刻告诉我**——这会直接改变 M9 的技术路线（回退方案：自建应用回调 + 内网穿透，代价是违反「不暴露公网」前提；或全程用 MockAdapter 降级演示）。
+> 2. **`secret` 只显示一次**，创建后立即复制保存；它等同密码，只写进本地 `.env`（已被 `.gitignore` 忽略），**绝不进仓库**（NFR-10 / pre-commit 钩子会拦）。
+>
+> ⚠️ 与钉钉的路径差异：钉钉是「开发者后台 → 企业内部应用 → AppKey/AppSecret + RobotCode（3 项）→ 开启 Stream 模式」；企业微信智能机器人只要 **2 项凭证**，且**不需要**在后台开启任何「模式」开关——长连接由客户端主动发起。
 
 ### 2.3 时间盒建议
 
@@ -106,11 +112,11 @@ M0 → M1 → M2 → M3 → M6 → M7 → M9(钉钉) → M12(验收)
 | 阶段一：地基 | M0~M2 | 骨架、配置、数据。目标是「跑得起来、有数据可查」 |
 | 阶段二：核心能力 | M3、M5、M6 | RAG + LLM + Agent，**项目 70% 的技术含量在这里** |
 | 阶段三：链路打通 | M4、M7 | 上传链路 + 问答链路，此时 Web 端已可完整演示 |
-| 阶段四：入口与界面 | M8、M9 | 后台 + 钉钉。**M9 是淘汰项，优先级高于 M8** |
+| 阶段四：入口与界面 | M8、M9 | 后台 + 企业微信。**M9 是淘汰项，优先级高于 M8** |
 | 阶段五：收尾提分 | M10~M12 | 测试、加分项、三份关键文档 |
 
 > **若时间紧张，砍单顺序（从先砍到后砍）**：M11 飞书 adapter → M11 Evals → M8 设置页 → M8 调试聊天页 → M11 Token 成本。
-> **绝对不砍**：M9 钉钉、M3 RAG、M6 Agent、M10 测试、M12 三份文档。
+> **绝对不砍**：M9 企业微信、M3 RAG、M6 Agent、M10 测试、M12 三份文档。
 
 ---
 
@@ -142,8 +148,8 @@ M0 → M1 → M2 → M3 → M6 → M7 → M9(钉钉) → M12(验收)
   - **统计范围限定代码文件**（`.py/.ts/.tsx/.js/.jsx`）；截图、录屏、`.md` 语料、`.pdf/.docx` 等资源与文档不计入（TDD ADR-14），避免 `docs/screenshots/` 触发假阳性
 - [ ] 写 `README.md` 骨架：项目名、一句话简介、技术栈表、目录结构、快速开始（占位）、Roadmap（占位）
 - [ ] 落定 `docs/PRD.md`、`docs/TDD.md`、`docs/DEV_PLAN.md`（即本三件套）
-- [ ] 配置 Git pre-commit 钩子：密钥扫描（正则 `sk-[A-Za-z0-9]{16,}` 等）+ 跑 `check_limits.sh`
-- [ ] 建 `docs/ai_journal.md`（铁律 2 的素材本）
+- [ ] 配置 Git pre-commit 钩子：密钥扫描（正则 `sk-[A-Za-z0-9]{16,}`、`wecom.*secret`、`bot_secret`、长度 >20 的疑似 token）+ 跑 `check_limits.sh`
+- [ ] 建 `docs/ai_journal.md`（铁律 2 的素材本）；🔴 **首批必须补录设计阶段已真实发生的两条**（发生在 M0 之前，别等到 M12 靠回忆编）：① AI 断言「企业微信强制要求公网回调 URL」导致错选钉钉，复核后发现「智能机器人长连接」才是正解；② AI 检索到的 `aibot-python-sdk` 是内容农场仓库（README 18 字节 / `language:null` / 无 license），靠交叉核对才筛出可用的 `wecom-aibot-sdk-python`。详见 DEV_PLAN M9 素材与 TDD §1.5 / R18
 
 **验收动作**
 ```bash
@@ -294,7 +300,7 @@ bash scripts/test.sh
 **AI_USAGE 素材（重点记录，这是最能体现驾驭力的里程碑）**
 - 🔴 **（已实测发生，最有说服力的一条）AI 在设计阶段把 `retrieval_min_score` 拍成 `0.35`，数值看起来完全合理**；直到用真实 bge-m3 服务测出「**不相关中文文本的余弦基线就有 0.48**」，才发现该阈值**低于噪声地板、等于没过滤**，拒答 L1 层形同虚设、幻觉防线直接失守 → 改为 `0.55` 并新增标定脚本 + 相对间隔判据。**教训：凡是有具体数值的超参，AI 给的都是「看起来合理」的猜测，必须用真实数据标定后才能写死。**
 - 🔴 **（已实测发生）AI 默认假设「OpenAI 兼容端点必然同时提供 chat 与 embedding」**，据此把两者绑在同一个 client 上；实测该端点 `/models` 返回的 23 个模型里**没有任何 embedding 模型**（`/embeddings` 三个模型名全 404），且这把 key **不能跨端点复用**（打标准 DashScope 返回 401）→ 架构改为 chat / embed **双 `base_url`**（ADR-15），embed 落到本机 BGE-M3 服务。**教训：供应商能力必须用 `/models` + 真实请求验证，不能靠「兼容 OpenAI 协议」这个名字去推断。**
-- 🔴 **（已实测发生）AI 不知道 `qwen3.8-max` 是推理模型**，按普通 chat 模型设计 SSE 解析；实测发现流式下 `delta.reasoning_content` 的 chunk **先于** `delta.content` 到达，若按常规写法无脑拼接，**钉钉里会先吐出一大段英文思考过程**（R14）。同时实测流式下 `usage` **恒为 `null`**，不加 `stream_options={"include_usage": true}` 则成本字段**静默落 0**（R15）。**教训：模型的「隐性行为」（是否推理、流式字段顺序、usage 是否补发）文档里常常不写，只能实测。**
+- 🔴 **（已实测发生）AI 不知道 `qwen3.8-max` 是推理模型**，按普通 chat 模型设计 SSE 解析；实测发现流式下 `delta.reasoning_content` 的 chunk **先于** `delta.content` 到达，若按常规写法无脑拼接，**企业微信里会先吐出一大段英文思考过程**（R14）。同时实测流式下 `usage` **恒为 `null`**，不加 `stream_options={"include_usage": true}` 则成本字段**静默落 0**（R15）。**教训：模型的「隐性行为」（是否推理、流式字段顺序、usage 是否补发）文档里常常不写，只能实测。** 🔁 **平台切换后此坑加重**：IM 改用 `reply_stream` 原生流式后是边生成边推送，思考过程会**实时刷在用户脸上**，不再有「先聚合再过滤」的补救机会。
 - AI 初版分块器**丢失字符偏移** → 我发现前端无法高亮 → 改为 `finditer` 记录 span（TDD §4.4.2 已预埋此案例）
 - AI 常用 `len(text.split())` 估算中文长度 → **中文没有空格，会严重低估**，必须用 `len(text)`
 - AI 给的 Chroma `where` 删除语法在不同版本有差异 → 需查官方文档确认
@@ -509,37 +515,42 @@ pnpm --dir frontend lint && pnpm --dir frontend build
 
 ---
 
-### M9 · ⭐ 钉钉 IM 集成（15 分 + 淘汰项，**最高优先级**）
+### M9 · ⭐ 企业微信 IM 集成（15 分 + 淘汰项，**最高优先级**）
 
-**目标**：员工在钉钉群里 @小苏 或私聊，能得到带引用的答案；任何异常都有友好兜底。
+**目标**：员工在企业微信群里 @小苏 或私聊，能得到**流式打字机输出**的带引用答案；任何异常都有友好兜底。
 
-> **前置条件**：§2.2 的 ①②③④ 人工任务已完成，`.env` 里有 `DINGTALK_CLIENT_ID` / `DINGTALK_CLIENT_SECRET` / `DINGTALK_ROBOT_CODE`，且测试群里已有机器人。
+> **前置条件**：§2.2 的 ①②③④ 人工任务已完成，`.env` 里有 `WECOM_BOT_ID` / `WECOM_BOT_SECRET`（建议同时配 `WECOM_ALLOWED_USER_IDS`），且测试群里已有智能机器人。
 > **若凭证未就绪**：先用 `MockIMAdapter`（终端交互模拟）把全部逻辑跑通并测完，凭证到手后只换 adapter 实现，**不阻塞开发**。
+> 🔴 **任务 0（spike）先于一切**：TDD §1.5 已声明——企业微信官方文档是 SPA、正文抓不到，本设计里的协议细节（`reply_stream` 语义、4000 字上限、帧结构）来自**第三方交叉印证而非官方原文**。所以拿到凭证后**第一件事是跑通 SDK 最小示例、把实测结果回写 TDD §1.5**，再动手写 adapter。跳过这步，后面全是空中楼阁。
 
 **任务清单**
-- [ ] `app/im/base.py`：`UnifiedMessage`、`IMAdapter` Protocol、`AdapterHealth`、`MessageHandler` 类型
+- [ ] 🔴 **任务 0 · 连通性 spike**（`backend/dev_tools/wecom_spike.py`，开发期脚本，不进运行时）：装 `wecom-aibot-sdk-python` → 用真实 `bot_id`/`secret` 连 `wss://openws.work.weixin.qq.com` → 收发一条文本 → **实测确认四件事**：① `reply_stream(finish=False/True)` 是「同一条消息原地刷新」还是「追加新消息」；② 单条长度上限是否真为 4000；③ 是否存在频率限制、攒批是否必需；④ `frame` 的真实字段结构（群 ID / userid / message_id / 是否 @ 机器人）。**结果回写 TDD §1.5 与 §4.6.3；与本设计冲突处一律以实测为准**
+- [ ] `app/im/base.py`：`UnifiedMessage`、`IMAdapter` Protocol、`AdapterHealth`、`MessageHandler` 类型；🔁 Protocol 新增 **`stream_reply()`**（替代原 `send_placeholder()`，见 ADR-13 改判）
 - [ ] `app/im/session.py`：`build_session_key()`（`platform:conversation_id:user_id`，TDD §4.6.2）
-- [ ] `app/im/dingtalk.py`：
-  - `RobotHandler.process()` → `ChatbotMessage` → `UnifiedMessage`
-  - 群聊 `at_users` 校验（非 @ 消息直接忽略，FR-4-05）
+- [ ] `app/im/wecom.py`：
+  - `WSClient({"bot_id":…, "secret":…})` + `client.on("message.text", handler)` → `frame` → `UnifiedMessage`
+  - 群聊「是否 @ 本机器人」校验（非 @ 消息直接忽略，FR-4-05）
   - 剔除 `@小苏 ` 前缀（FR-4-06）
-  - `send_reply()`（Markdown）、`send_placeholder()`、`send_fallback()`、`health()`
-- [ ] `app/im/formatter.py`：答案 + 引用 → 钉钉 Markdown（TDD §4.6.4 模板）
+  - **`wecom_allowed_user_ids` 白名单拦截**（TDD §1.5 安全建议）——不在名单内直接忽略并记 WARNING，**不进 Agent、不烧 token**
+  - `stream_reply()`（`reply_stream` 打字机）、`send_reply()`（一次性兜底）、`send_fallback()`、`health()`
+  - 🔴 **SDK 调用全部收敛在本文件**，其余模块只依赖 `IMAdapter` Protocol —— 这是 R18（社区 SDK 风险）的核心隔离对策
+- [ ] `app/im/formatter.py`：答案 + 引用 → 企业微信 Markdown（TDD §4.6.4 模板）；🔴 **按 4000 字符上限在「引用条目边界」分段**，不硬截断字符
 - [ ] `app/im/runner.py`：
   - 长连接生命周期（在 FastAPI lifespan 中 `asyncio.create_task` 启停）
   - **幂等去重**：内存 LRU(1024) + `processed_messages` 表双保险
-  - **占位消息**：收到消息立刻发「🤔 正在查阅…」，Agent 结束后**追加一条**正式答案（FR-4-10 / TDD §4.6.3 方案 A / ADR-13）
-    - ⚠️ **实现方式已定稿**：钉钉普通 text/Markdown 消息**不支持编辑已发送内容**，因此**不做原地更新**，明确采用「占位 + 追加」**两条独立消息**
-    - 失败场景下用户会看到「🤔 正在查阅…」+「⚠️ 兜底话术」两条消息，这是**已接受的取舍**（优于长时间无响应）
-    - 单卡片内流式刷新（钉钉 AI 卡片）体验更好但需额外申请卡片模板 ID，列为 P2 加分项放 **M11**
+  - 🔁 **流式回复（方案 A，ADR-13 已改判）**：Agent 每产出一段就 `reply_stream(finish=False)`，结束 `finish=True` 收尾——**一条消息内打字机**，不再发两条
+    - **攒批**：按 `im_stream_chunk_chars=40` **或** `≥300ms` 取先到者，**禁止逐 token 调用**（会打爆网关频率限制）
+    - **工具调用阶段推状态文案**（「🔍 正在查询考勤…」），把 60s 硬超时窗口内的静默期填上
+    - ⚠️ **降级路径必须保留**：若 spike 证明 `reply_stream` 实为追加语义，或流式中途抛异常 → 回落「占位 + 追加两条消息」（TDD §4.6.3 方案 B）。**两条路径都要有测试**
+    - 🔴 **`reasoning_content` 必须在 Provider 层就分流干净**（R14 已升级为高风险）：流式边生成边可见，思考过程一旦漏出就实时刷在用户脸上，**没有事后过滤的机会**
   - **硬超时** `asyncio.wait_for(..., im_reply_timeout_s=60)`，超时主动发提示（FR-4-09）
   - **异常兜底分级话术**（TDD §4.6.3 表格，FR-4-08）
-  - supervisor：连接异常退出后指数退避重启 + 刷新 health
+  - supervisor：SDK **已内置**指数退避重连（1s→…→30s）+ ACK 保序，外层 supervisor 只兜**进程级**异常（连接协程整体崩溃）并刷新 health
 - [ ] `/api/health` 与 `/api/settings` 暴露 IM 连接状态（FR-4-15）
-- [ ] `dingtalk_enabled=false` 时**完全跳过**，不影响其他功能启动
-- [ ] 测试：`test_session.py` 4 条、`test_im_adapter.py` 4 条（假 SDK 注入消息，断言归一化/去重/兜底被调用）
+- [ ] `wecom_enabled=false` 时**完全跳过**，不影响其他功能启动；`wecom_enabled=true` 但白名单为空 → 打 WARNING
+- [ ] 测试：`test_session.py` 4 条、`test_im_adapter.py` 5 条（假 SDK 注入 `frame`，断言归一化 / **白名单拦截** / 去重 / 兜底被调用 / **攒批行为** / `finish=True` 恰好一次）
 
-**验收动作（在真实钉钉里跑 PRD §7 全部 10 题）**
+**验收动作（在真实企业微信里跑 PRD §7 全部 10 题 + 3 项平台专属验证）**
 ```
 ① 群里发「今天天气不错」（不 @ 机器人）→ 机器人不响应 ✅
 ② 群里 @小苏 员工每年有几天年假？ → 收到带「📎 来源」的 Markdown 答案 ✅
@@ -553,21 +564,29 @@ pnpm --dir frontend lint && pnpm --dir frontend build
 ⑩ 把 .env 里 LLM_API_KEY 改成 sk-invalid，重启，@小苏 提问
    → 收到「⚠️ 我的模型服务鉴权失败了，请联系管理员检查 API Key 配置。」，不转圈 ✅
 ⑪ 同一条消息快速重发 3 次 → 只回答一次 ✅（幂等）
-⑫ Web /settings 页显示「钉钉：已连接，最后心跳 xx:xx:xx」✅
-⑬ 问一个耗时较长的问题 → 应先收到「🤔 正在查阅…」，数秒后再收到正式答案
-   → 确认是**两条独立消息**（钉钉不支持编辑已发送消息，符合 ADR-13 定稿方案）✅
+⑫ Web /settings 页显示「企业微信：已连接，最后心跳 xx:xx:xx」✅
+⑬ 🔁 问一个耗时较长的问题 → 应在**同一条消息内**先看到「🔍 正在查询…」状态文案，
+   随后**原地刷新**为完整答案（打字机效果），**全程只有一条消息** ✅（ADR-13 方案 A）
+   ⚠️ 若实测显示为两条独立消息 → 说明 reply_stream 是追加语义，回落方案 B 并回写 TDD §1.5
+⑭ 🔴 新增：@小苏 问一个会触发推理的复杂问题 → 答案里**不得出现任何英文思考过程** ✅（R14）
+⑮ 🔴 新增：用一个**不在白名单**的账号 @小苏 → 机器人不响应，日志有 WARNING ✅
+⑯ 🔴 新增：问一个答案很长的文档题 → 引用区块超 4000 字时应**在引用边界分段成多条**，
+   而不是被硬截断 ✅
 ```
 
-**commit 计划（4 个）**
-1. `feat(im): 定义 IMAdapter 抽象与统一消息模型`
-2. `feat(im): 实现会话隔离键与消息格式化`
-3. `feat(im): 接入钉钉 Stream 长连接与消息处理`
-4. `feat(im): 实现幂等去重、硬超时与分级错误兜底`
+**commit 计划（5 个）**
+1. `chore(im): 企业微信智能机器人连通性 spike 与协议实测`
+2. `feat(im): 定义 IMAdapter 抽象与统一消息模型`
+3. `feat(im): 实现会话隔离键、消息格式化与 4000 字分段`
+4. `feat(im): 接入企业微信 WebSocket 长连接与流式打字机回复`
+5. `feat(im): 实现白名单、幂等去重、硬超时与分级错误兜底`
 
 **AI_USAGE 素材（这个里程碑素材最丰富）**
-- `dingtalk-stream` SDK 是**同步阻塞**模型，AI 常直接 `client.start_forever()` 阻塞掉整个 asyncio 事件循环 → 必须用 `asyncio.to_thread` 或 SDK 的异步入口包装。这是很典型的「AI 不懂运行时模型」案例。
-- 钉钉 Markdown 消息对 `\n` 与列表语法的支持有限制，AI 给的标准 Markdown 在钉钉里渲染错乱 → 需实测调整。
-- 群聊 `at_users` 字段结构与 `isInAtList` 判断，官方文档描述模糊，AI 给的判断方式不准 → 靠打印原始 payload 反推。
+- 🔴 **（本轮已真实发生，最有说服力的一条）AI 曾断言「企业微信强制要求公网回调 URL，直接排除」**，据此把 IM 选成钉钉；实际复核发现企业微信另有**「智能机器人长连接」**产品线——出向 WebSocket、免公网入口 → 平台改回企业微信，还**顺带解除了**「普通消息不可编辑」这条限制，把打字机流式从 P2 加分项拉进 M9 主线。**教训：AI 对平台能力的判断往往基于「最常见的那条接入路径」，会把局部限制当成全局结论。涉及平台选型必须自己去翻文档的导航结构，确认到底有几条路。**
+- 🔴 **（本轮已真实发生）AI 检索到的 Python SDK `aibot-python-sdk` 是内容农场仓库**：描述写得极其专业（"async WebSocket, automatic reconnection, multiple message types, full type hints"），但实际 README 只有 18 字节、GitHub `language` 识别为 `null`、无 license、topics 混着 `whatsapp-automation`/`tensorflow`/`baileys`。**只信描述就会给项目引入一个不可审计的依赖** → 靠交叉核对 star / license / README 实质内容 / 最近 push 时间，才筛出真正可用的 `wecom-aibot-sdk-python`（MIT、已上 PyPI、README 一万字）。
+- 🔴 `reply_stream` 的**攒批粒度**AI 不会主动考虑：它倾向每个 token 调一次，会直接打爆网关频率限制。必须自己定「40 字符 / 300ms 取先到」并写测试断言。
+- 企业微信 Markdown 对 `\n` 与列表语法的支持可能有限制，AI 给的标准 Markdown 可能渲染错乱 → spike 阶段一并实测调整。
+- 群聊「是否 @ 本机器人」的字段结构，官方文档描述模糊（**且本项目根本抓不到正文**）→ 只能靠 spike 打印原始 `frame` 反推。
 
 ---
 
@@ -617,7 +636,7 @@ git log -p | grep -icE "sk-[A-Za-z0-9]{16,}"   # 输出 0
   - `evals/` 是**根目录下的新目录**（TDD §3 已登记）。目录**不计入**根目录「6 个文件」的约束，新增它不改变该数字；`evals/` 内 3 个文件也远低于 8 的上限
   - `report.md` 由脚本生成并**入库**，作为加分项的可验证证据
 - [ ] **④ 飞书第二 adapter**：`app/im/feishu.py` 实现同一 `IMAdapter` Protocol（长连接模式）；**验证「业务逻辑零改动」**——`git diff --stat` 应只显示新增 adapter 文件与注册行。这个 diff 本身就是加分项的硬证据，截图进 `AI_USAGE.md`
-- [ ] **⑤（可选）钉钉 AI 卡片流式输出**：打字机效果
+- [ ] **⑤（可选）企业微信进阶能力**：`enter_chat` 入群欢迎语 + `feedback_event` 采集点赞/点踩并回流 Evals 形成反馈闭环（TDD §1.5）。注：**打字机流式输出已在 M9 主线达成**，不再属于加分项
 - [ ] **⑥（可选）可观测性**：调用链汇总表 / 简单 metrics 端点
 
 **验收动作**
@@ -643,12 +662,12 @@ git diff --stat HEAD~1                              # 证明新增平台只改�
 **任务清单**
 - [ ] **`README.md` 完整版**（逐项对应题目 6.1）：
   - 项目介绍：解决什么问题、面向谁
-  - **截图 / 录屏**：钉钉对话截图（含引用来源）、Web 后台 4 页截图、原文高亮截图 → **统一存 `docs/screenshots/`**，README 用相对路径 `docs/screenshots/xxx.png` 引用
+  - **截图 / 录屏**：企业微信对话截图（含引用来源、**打字机流式过程**）、Web 后台 4 页截图、原文高亮截图 → **统一存 `docs/screenshots/`**，README 用相对路径 `docs/screenshots/xxx.png` 引用
     - ⚠️ 截图数量可能达十几张，**不能直接放 `docs/`**（会让 `docs/` 逼近 8 文件上限）；放子目录 `docs/screenshots/` 后，`docs/` 本身仍是 5 个 `.md`
     - GitHub 对仓库内图片有单文件体积限制，截图统一压到 ≤300 KB / 张（`check_limits.sh` 不校验资源，靠自觉）
   - **架构图**：TDD §2.1 图 + 简要说明
   - 安装与启动：前置依赖（uv / pnpm / Node 版本）→ 克隆 → 配 `.env` → `./scripts/setup.sh` → `./scripts/start.sh`；**Windows 用户注明用 Git Bash**
-  - 使用说明：钉钉机器人怎么加、后台怎么用、验收 10 题怎么复现
+  - 使用说明：企业微信智能机器人怎么创建与加群、后台怎么用、验收 10+3 题怎么复现
   - 技术栈：表格列出选型 + 版本 + 理由
   - Roadmap：已完成 / 进行中 / 计划中
   - 工程规范说明：≤500 行 / ≤8 文件的约定与自检方式，并**显式写清三条口径**（对应 TDD §3 约定 + ADR-14）：① 只数目录的**直接子文件**，子目录不计入；② `check_limits.sh` **只统计代码文件**（`.py/.ts/.tsx/.js/.jsx`），截图 / 录屏 / 语料 / 文档不计入；③ 根目录文件数为 **6**，`backend/`、`frontend/`、`scripts/`、`data/`、`docs/`、`evals/`、`logs/` 均为目录不计入
@@ -656,12 +675,12 @@ git diff --stat HEAD~1                              # 证明新增平台只改�
 - [ ] **`AI_USAGE.md`**（15 分，**从 `docs/ai_journal.md` 素材提炼，禁止事后编造**）：
   - 我如何使用 AI：分工边界（哪些让 AI 写、哪些必须自己写）、prompt 策略、验证机制
   - **踩坑案例 ≥5 个**，每个含：原始 prompt 摘录 → AI 给的方案 → 问题所在 → 我的修正 → 复盘
-    - 选材建议：分块器丢偏移 / 中文长度用 `split()` 估算 / if-else 写死工具路由 / dingtalk-stream 阻塞事件循环 / Tailwind 4 配置写成 v3 / calculator 用 `eval` / 同名文档重复索引
-  - AI 帮不上忙的部分：钉钉凭证申请、拒答阈值调参的判断、产品取舍、验收标准理解
-  - 我如何验证 AI 产出：单测断言、Evals、手工跑验收 10 题、逐行 review 的标准
+    - 选材建议：分块器丢偏移 / 中文长度用 `split()` 估算 / if-else 写死工具路由 / **误判「企业微信必须公网回调」而错选平台** / **把内容农场 SDK 当成可用依赖** / `reply_stream` 逐 token 调用打爆频率限制 / Tailwind 4 配置写成 v3 / calculator 用 `eval` / 同名文档重复索引
+  - AI 帮不上忙的部分：企业微信智能机器人凭证申请（**含确认该功能是否对本企业开放**）、拒答阈值调参的判断、产品取舍、验收标准理解
+  - 我如何验证 AI 产出：单测断言、Evals、手工跑验收 10+3 题、逐行 review 的标准
 - [ ] **`自评.md`（≤1 页）**：
   - 最得意的技术决策 2-3 个（首选：**自研带偏移的分块器** → 支撑「引用可高亮原文位置」；次选：**api/im 平级共用 AgentService** → 结构性保证逻辑复用）
-  - 已知不足：无鉴权、SQLite 单机、未做 OCR、阈值需更多语料调优、飞书覆盖度低于钉钉
+  - 已知不足：无鉴权、SQLite 单机、未做 OCR、阈值需更多语料调优、飞书 adapter 覆盖度低于企业微信主链路、IM 依赖社区 SDK 而非官方（R18）
   - 若继续迭代会怎么做：接 Langfuse 可观测、pgvector + 混合检索（BM25+向量）、Rerank 模型、多租户、真实 SSO
 - [ ] **`docs/ACCEPTANCE.md`**：PRD §7 清单 + **实际执行结果勾选**，每题附 `docs/screenshots/` 下的截图相对路径（截图本体放子目录，`docs/` 只保留 5 个 `.md`）
 - [ ] 录 30 秒 demo 视频 `docs/screenshots/demo.mp4`（备方案，防现场翻车；README 顶部给出链接）
@@ -679,7 +698,7 @@ git diff --stat HEAD~1                              # 证明新增平台只改�
 
 ## 4. Commit 历史总览（淘汰项的直接证据）
 
-预期约 **53 个提交**，每个都对应一个**独立可运行**的状态：
+预期约 **54 个提交**，每个都对应一个**独立可运行**的状态：
 
 | 里程碑 | 提交序列 |
 |---|---|
@@ -692,7 +711,7 @@ git diff --stat HEAD~1                              # 证明新增平台只改�
 | **M6** | `feat(agent): 实现工具注册中心与四步防御式调用`<br>`feat(tools): 实现时间、计算器与内部 API 查询工具`<br>`feat(tools): 实现知识库检索工具与参考资料注入格式`<br>`feat(agent): 实现 Function Calling 编排循环与超轮次降级`<br>`feat(agent): 实现三层拒答机制（阈值/Prompt/无引用后校验）` |
 | **M7** | `feat(services): 实现 IM/Web 共用的统一问答服务`<br>`feat(api): 实现 SSE 流式问答接口与帧协议`<br>`feat(api): 实现对话日志查询与统计接口`<br>`test(e2e): 补充多轮上下文与验收题端到端测试` |
 | **M8** | `feat(frontend): 用 pnpm 初始化 Next.js 15 + Tailwind 4 工程`<br>`feat(frontend): 接入 OpenAPI 类型生成与 API/SSE 客户端`<br>`feat(frontend): 实现文档管理页（上传/状态轮询/删除/预览）`<br>`feat(frontend): 实现对话日志页与工具调用链详情`<br>`feat(frontend): 实现调试聊天页与引用原文高亮` |
-| **M9** | `feat(im): 定义 IMAdapter 抽象与统一消息模型`<br>`feat(im): 实现会话隔离键与消息格式化`<br>`feat(im): 接入钉钉 Stream 长连接与消息处理`<br>`feat(im): 实现幂等去重、硬超时与分级错误兜底` |
+| **M9** | `chore(im): 企业微信智能机器人连通性 spike 与协议实测`<br>`feat(im): 定义 IMAdapter 抽象与统一消息模型`<br>`feat(im): 实现会话隔离键、消息格式化与 4000 字分段`<br>`feat(im): 接入企业微信 WebSocket 长连接与流式打字机回复`<br>`feat(im): 实现白名单、幂等去重、硬超时与分级错误兜底` |
 | **M10** | `test: 补齐单元/集成/端到端测试至 40+ 条并强制离线可跑`<br>`chore(scripts): 完善 setup/start/stop/test/lint/acceptance 脚本`<br>`chore(docker): 添加 Dockerfile 与 compose 一键部署` |
 | **M11** | `feat(cost): 后台展示 Token 消耗与成本估算`<br>`feat(evals): 添加 20+ case 自动化评测与报告生成`<br>`feat(im): 接入飞书长连接作为第二个 IM adapter`<br>`docs: 补充多模型对比与切换说明` |
 | **M12** | `docs(readme): 补全项目介绍、架构图、截图与快速开始`<br>`docs: 编写 AI_USAGE.md（真实踩坑案例与验证方法）`<br>`docs: 编写自评与验收执行记录`<br>`chore: 最终红线自查与发布准备` |
@@ -724,16 +743,16 @@ git diff --stat HEAD~1                              # 证明新增平台只改�
 
 | # | 事项 | 阻塞里程碑 | 紧急度 |
 |---|---|---|---|
-| 1 | **确认 LLM 供应商并提供 API Key**（建议通义 DashScope：chat + embedding 同一 key） | M5 之后所有真实联调 | 🔴 高 |
-| 2 | **钉钉开发者凭证**：AppKey / AppSecret / RobotCode（获取路径见 §2.2） | **M9（15 分 + 淘汰项）** | 🔴 **最高** |
-| 3 | 确认 IM 平台选型（钉钉 Stream 模式） | M9 | 🔴 高 |
+| 1 | ~~确认 LLM 供应商并提供 API Key~~ → ✅ **已完成** | — | ✅ Chat 用阿里云 MaaS token-plan + `qwen3.8-max`（chat/tool_call/stream 三项实测 200）；Embedding 用本机 BGE-M3 服务（TDD §1.3/§1.4） |
+| 2 | **企业微信智能机器人凭证**：`bot_id` / `secret`（获取路径见 §2.2）；🔴 **并确认「智能机器人」入口对你的企业是否开放**（可能需企业认证） | **M9（15 分 + 淘汰项）** | 🔴 **最高（唯一未解除的外部阻塞）** |
+| 3 | ~~确认 IM 平台选型（钉钉 Stream 模式）~~ → ✅ **已定：企业微信「智能机器人长连接」** | M9 | ✅ 已定（TDD §1.5 / ADR-02 / ADR-17）；钉钉完全移出范围 |
 | 4 | 确认向量库（ChromaDB）与「不用 LangChain、自研 RAG」的决策 | M3 | 🟠 中 |
 | 5 | 确认交付 deadline（决定是否启用 §2.3 的砍单顺序） | 全部 | 🔴 高 |
 | 6 | 是否需要 Docker 部署路径（影响 M10 工作量） | M10 | 🟡 低 |
 | 7 | 是否做飞书第二 adapter（加分项） | M11 | 🟡 低 |
 
-> **确认第 1~5 项后即可进入 M0。**
-> 其中第 1、2 项需要你在外部平台亲自操作，**建议现在就开始，与代码开发并行**——这是整个计划中唯一无法靠写代码解决的阻塞点，也是唯一可能导致「淘汰」的外部依赖。
+> **第 1、3 项已定，第 4、5 项不阻塞 M0 → 可以进入 M0。**
+> 🔴 **只剩第 2 项需要你在外部平台亲自操作**：企业微信智能机器人的 `bot_id` / `secret`，以及**确认「智能机器人」入口是否对你的企业开放**（可能要求企业认证）。**建议现在就去后台点一遍，与 M0~M8 的开发并行**——这是整个计划中唯一无法靠写代码解决的阻塞点，也是唯一可能导致「淘汰」的外部依赖。若该入口不存在，请立刻告知，M9 技术路线需要改判（回退方案见 TDD R18 ④）。
 
 ---
 
