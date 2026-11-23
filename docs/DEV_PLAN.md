@@ -125,6 +125,7 @@ M0 → M1 → M2 → M3 → M6 → M7 → M9(钉钉) → M12(验收)
 
 **任务清单**
 - [ ] 确认 GitHub 仓库 `Lwr99204/xiaosu-ai-assistant` 为 **public**，本地 `origin` 指向正确
+- [ ] **执行 `git config http.version HTTP/1.1`**（仓库级）—— 本机走 HTTPS + HTTP/2 推送**必现** `Recv failure: Connection was reset`（exit 128），降级到 HTTP/1.1 后立即成功。**已实测验证**，见 TDD R9
 - [ ] 建完整目录树（按 TDD §3，含 `docs/screenshots/` 与 `backend/dev_tools/`；`evals/` 可留到 M11 再建），空目录放 `.gitkeep`
 - [ ] 写 `.gitignore`：`.env`、`.venv/`、`__pycache__/`、`node_modules/`、`.next/`、`logs/*`（保留 `.gitkeep`）、`storage/`、`*.db`、`.pytest_cache/`、`dist/`、`.DS_Store`
 - [ ] 写 `.env.example`：与 `Settings` 字段一一对应，每项带中文注释与示例值（**只放占位符，绝不放真实 key**）
