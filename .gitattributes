@@ -1,0 +1,30 @@
+# ═══════════════════════════════════════════════════════════════════════
+# 行尾符策略 —— 修一个实测踩到的坑（M0）
+#
+# 本机在 Windows 上编辑，编辑器默认写 CRLF。CRLF 的 .sh 在 Git Bash 里
+# 「bash scripts/x.sh」侥幸能跑，但：
+#   · 直接执行 ./scripts/x.sh → shebang 变成 "/usr/bin/env bash\r" → bad interpreter
+#   · M10 的 Docker（Linux）里必挂
+#   · 任何 CI 都会挂
+# 故在此从机制上锁死，而非依赖每次手工转换。
+# ═══════════════════════════════════════════════════════════════════════
+
+# Shell 脚本强制 LF（题目要求 scripts/*.sh，必须在 Git Bash 与 Linux 下都能跑）
+*.sh    text eol=lf
+*.bash  text eol=lf
+
+# Git 钩子无扩展名，但同样是 shell 脚本
+pre-commit   text eol=lf
+pre-push     text eol=lf
+
+# 二进制文件禁止任何行尾转换（否则截图/录屏/PDF 语料会被损坏）
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.mp4   binary
+*.pdf   binary
+*.docx  binary
+*.ico   binary
+*.woff  binary
+*.woff2 binary
