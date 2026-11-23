@@ -97,21 +97,52 @@
 → `LLMProvider` 的**流式请求必须默认带上该参数**。否则流式路径（IM 与 Web **都是**流式）拿不到 token 数，`conversations.total_tokens / cost_cny` 会全部落 0，FR-5-10 与后台日志的成本列静默失效。**这是最容易漏、且漏了不报错只静默归零的坑。**
 
 
-### 1.4 🔴 待决：Embedding 方案（当前唯一硬阻塞）
+### 1.4 ✅ 已定：Embedding 走本地 BGE-M3 服务（实测通过）
 
-**问题**：探测 2 + 3 证明——**手上这把 key 拿不到任何云端 embedding 能力**，而 RAG（M3）的向量化环节必须有 embedding。这是当前唯一的硬阻塞；其余设计（Agent / 工具 / 流式 / IM / 后台）均不受影响，可按计划推进。
+**背景**：探测 2 + 3 证明——**手上这把 key 拿不到任何云端 embedding 能力**（`/embeddings` 三种模型名全 404；`/models` 23 个全量中无一 embedding 模型；同 key 打标准 DashScope 返回 401）。RAG 的向量化环节必须另找出路。
 
-| 方案 | 做法 | 优点 | 代价 | 评价 |
-|---|---|---|---|---|
-| **A. 再申请一把标准 DashScope Key** | 阿里云百炼控制台开一个普通 API Key（`sk-` 开头，**不是** `sk-sp-`），用 `text-embedding-v3`（1024 维）或 `v4` | 与原设计完全一致、零改动；中文效果最好；近乎免费 | 需你再去控制台操作一次（约 5 分钟） | ⭐ **首选** |
-| **B. 本地 ONNX 中文 embedding** | `onnxruntime` + `bge-small-zh-v1.5`（~95 MB），封一个 `LocalEmbeddingProvider` 实现同一个 Protocol | **完全离线、零调用成本**；面试现场断网也能演示 RAG（反而是亮点）；与 ChromaDB 同进程，部署更简单 | 首次需下载模型；`setup.sh` 变重；需自行处理 tokenizer 与归一化 | ⭐ **兜底首选** |
-| C. `sentence-transformers` + BGE | 同 B 但走 PyTorch | 生态成熟、代码最少 | **拖入 torch ~2 GB+**，`.venv` 巨大、安装极慢，与「轻量」目标冲突 | ❌ 否决 |
-| D. ChromaDB 默认 embedding | `DefaultEmbeddingFunction()`（`all-MiniLM-L6-v2`） | 零配置开箱即用 | **英文模型，中文检索质量差**；制度类中文文档命中率明显偏低 → 直接拖累 RAG 那 18 分 | ❌ 否决 |
-| E. 放弃向量、纯 BM25 | — | 无任何依赖 | 题目明确要求向量数据库，**会失分** | ❌ 否决 |
+**最终方案**：复用本机已有的 **BGE-M3 独立 embedding 服务**（`E:\Models\bge-m3-service`，FastAPI + sentence-transformers + torch，自带 venv，实测 `device=cuda`）。它暴露的正是 **OpenAI 兼容的 `POST /v1/embeddings`**，因此 backend **不需要新增任何重依赖**——直接复用已有的 `openai.AsyncOpenAI` 客户端，只把 `base_url` 指向本地即可。
 
-> **无论最终选 A 还是 B，`EmbeddingProvider` 都必须是 Protocol 抽象**（TDD 原设计已有），两者**可以共存**：`.env` 中用 `EMBEDDING_PROVIDER=openai|local` 一键切换。这样即使现场网络异常，也能立刻切到本地 embedding 继续演示——**这条容错路径本身就值得写进 `自评.md` 的技术亮点**。
+**实测数据（2026-11-23，服务运行状态下测得）**：
+
+| 项 | 实测值 | 对设计的影响 |
+|---|---|---|
+| `GET /health` | `{"status":"ok","model":"bge-m3","loaded":true}` | 启动自检直接用它，比发一次真实 embed 便宜；`loaded:false` 表示模型还在加载，需重试而非报错 |
+| 向量维度 | **1024** | `embed_dim = 1024`；Chroma collection 维度按此固定，**换模型必须重建索引**（R8） |
+| L2 范数 | **1.0**（精确） | 向量已归一化 → **余弦相似度 == 点积**。Chroma 显式用 `cosine` 空间，无需二次归一化 |
+| 单条延迟 | 首次 **2.1 s**（含 CUDA 预热）→ 之后毫秒级 | 🔴 首次请求明显慢，需在启动自检时**预热一次**，否则第一个提问的用户会莫名卡顿 |
+| 批量 4 条 | **278 ms**（GPU） | 索引数百分块毫无压力，`embed_batch_size=16` 合理 |
+| `usage.prompt_tokens` | 19（= 输入**字符数**） | ⚠️ 该服务用 `len(str(t))` 冒充 token，**不是真实 BPE token**。成本统计若混用会失真；本地 embedding 零成本，直接记 0 元 |
+
+**语义有效性验证**（这一步决定 RAG 那 18 分成不成立，所以必须实测）——query = `年假有几天`：
+
+| 候选片段 | 余弦相似度 |
+|---|---|
+| 员工入职满一年享有5天带薪年假 | **0.7079** ✅ 正确命中 |
+| 上班时间为每日9点至18点 | 0.5265 |
+| 报销需在费用发生后30天内提交 | 0.4779 |
+
+→ 正确片段以 **0.18 的显著优势**排第一，**检索有效性成立**。
+
+**🔴 但由此暴露一个必须修正的设计缺陷**：**完全不相关**的中文文本之间余弦仍有 **0.48**（BGE 类模型语义空间各向异性 / 锥形分布的固有特性）。而原设计的 `retrieval_min_score = 0.35` **低于这个噪声地板，等于完全不过滤**——拒答 L1 层形同虚设，任何提问都会硬凑出「参考资料」喂给 LLM，直接放大幻觉风险（FR-2-08/09 失守）。
+→ 已把默认阈值改为 **0.55**，并新增 **R16** 与 M3 的**阈值标定任务**（详见 §4.4.4）。**这是本次实测最有价值的产出**：一个不实测就绝不可能发现、且发现前看起来完全合理的参数错误。
+
+**被否决的备选**：
+
+| 方案 | 否决理由 |
+|---|---|
+| 本地 ONNX（`onnxruntime` + bge） | `E:\Models\bge-m3\onnx\` 里 `model.onnx` 仅 0.7 MB，旁边躺着 `model.onnx_data.incomplete`（168 MB）——**该导出是残缺的、不可用**；重新导出成本高且无必要 |
+| 项目内直接装 `sentence-transformers` | 会把 **torch 2 GB+** 拖进 backend 的 `.venv`，与「轻量、安装快」目标冲突。**用独立服务隔离依赖才是更优架构** |
+| `bge-base-zh-v1.5`（`C:\Users\26943\models\`，768 维） | 效果弱于 M3；保留为**降级备选**，但切换需重建索引 |
+| ChromaDB 默认 `all-MiniLM-L6-v2` | 英文模型，中文检索质量差，直接拖累 18 分 |
+| 放弃向量、纯 BM25 | 题目明确要求向量数据库，会失分 |
+
+> **架构收益**：embedding 服务与 backend 进程解耦后——① backend `.venv` 保持轻量（无 torch）；② embedding **完全离线**，面试现场断网也能演示 RAG；③ 服务崩了不影响 backend 启动，只是索引/检索报错，**故障域清晰**。
 >
-> 注：若选 B，`docs/DEV_PLAN.md` M3 需增加「下载 ONNX 模型」一步；`backend/app/rag/embedding.py` 从单实现变为双实现（仍满足 ≤500 行，必要时拆 `embedding_local.py`）。
+> **代价与对策**：项目因此**依赖一个外部本地服务**，仓库无法自包含 2.2 GB 权重。三条对策：① 把服务代码副本收进 `backend/dev_tools/embedding_service.py`（README 注明来源为本机已有脚本），保证可复现；② README 写清启动方式与端口；③ backend 启动时对 `/health` 自检，不可达则打印**可操作的**错误提示（「请先运行 `python backend/dev_tools/embedding_service.py`」）而非静默失败。
+>
+> **附带说明**：`modules.json` 声明了 `2_Normalize` 模块而该目录实际不存在——**无害**，因为 sentence-transformers 的 `Normalize.load(input_path)` 实现是 `return Normalize()`，根本不读该路径；且服务端 `encode(normalize_embeddings=True)` 又归一化了一次，双保险。已实测 L2norm=1 确认。
+
 
 ---
 
@@ -151,11 +182,11 @@
 └───────┬───────┘    └────────┬─────────┘    └──────────┬───────────┘
         ▼                     ▼                         ▼
 ┌───────────────┐    ┌──────────────────┐    ┌──────────────────────┐
-│ ChromaDB      │    │ Mock 内部 API    │    │  外部模型服务 (HTTPS)│
-│ 向量 + 元数据 │    │ employees /      │    └──────────────────────┘
-└───────────────┘    │ attendance /     │
-                     │ orders           │
-┌───────────────┐    └──────────────────┘
+│ ChromaDB      │    │ Mock 内部 API    │    │ Chat: token-plan     │
+│ 向量 + 元数据 │    │ employees /      │    │   (HTTPS 云端)       │
+└───────────────┘    │ attendance /     │    │ Embed: bge-m3        │
+                     │ orders           │    │   (本地 :8001 离线)  │
+┌───────────────┐    └──────────────────┘    └──────────────────────┘
 │ SQLite        │◄── 文档元数据 · 对话日志 · 工具调用记录 · Token 消耗
 │ logs/         │◄── 结构化日志（按天轮转）· request_id 贯穿全链路
 └───────────────┘
@@ -355,21 +386,24 @@ class Settings(BaseSettings):
     llm_provider: Literal["openai_compat", "mock"] = "openai_compat"
     llm_api_key: SecretStr                          # 必填，SecretStr 保证 repr/日志不泄露
     llm_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    llm_model: str = "qwen-plus"
+    llm_model: str = "qwen3.8-max"                    # 实测可用；同 key 备选 qwen3.8-flash / deepseek-v4-pro / glm-5.3
     llm_temperature: float = 0.1                    # 问答场景压低随机性
     llm_timeout_s: float = 30.0
     llm_max_retries: int = 2
 
-    # ── Embedding ──────────────────────────────────────────
-    embed_model: str = "text-embedding-v4"
-    embed_dim: int = 1024
-    embed_batch_size: int = 16
+    # ── Embedding（本地 BGE-M3 独立服务，OpenAI 兼容；实测见 §1.4）──
+    embed_base_url: str = "http://127.0.0.1:8001/v1"  # 🔴 与 chat 的 base_url 分开：chat 走云端 token-plan，embed 走本地
+    embed_model: str = "bge-m3"
+    embed_dim: int = 1024                             # 实测值；改动必须重建索引（R8）
+    embed_batch_size: int = 16                        # 实测批量 4 条 278ms(GPU)
+    embed_api_key: str = "not-needed"                 # 本地服务不校验，但 OpenAI 客户端要求非空
+    embed_timeout_s: float = 60.0                     # 首次请求含 CUDA 预热（实测 2.1s），留足余量
 
     # ── RAG ────────────────────────────────────────────────
     chunk_max_chars: int = 600
     chunk_overlap_chars: int = 80
     retrieval_top_k: int = 8
-    retrieval_min_score: float = 0.35               # 拒答阈值（FR-2-09）
+    retrieval_min_score: float = 0.55               # 拒答阈值（FR-2-09）🔴 实测标定：不相关中文噪声地板≈0.48、正确命中≈0.71；原 0.35 低于噪声地板等于不过滤（§1.4 / R16）
 
     # ── Agent ──────────────────────────────────────────────
     agent_max_tool_rounds: int = 5                  # FR-3-06
@@ -525,7 +559,7 @@ class VectorStore(Protocol):
     async def count(self) -> int: ...
 ```
 
-- **`ChromaStore`**：`PersistentClient(path=settings.chroma_dir)`，单 collection `xiaosu_kb`。
+- **`ChromaStore`**：`PersistentClient(path=settings.chroma_dir)`，单 collection `xiaosu_kb`，**显式指定 `metadata={"hnsw:space": "cosine"}`**——bge-m3 输出已 L2 归一化（实测 L2norm=1），cosine 空间下 `distance = 1 - cos`，score 可直接解释为余弦相似度，便于与实测基线对齐调阈值。
 - **元数据写入**：`doc_id / filename / index / heading_path(join " > ") / char_start / char_end / page`——检索结果无需回表即可构造完整引用。
 - **批量 embedding**：按 `embed_batch_size`(16) 分批，单批失败重试 1 次；全批失败则文档置 `failed`。
 - **`delete_by_doc`** 用 Chroma 的 `where={"doc_id": ...}` 过滤删除 → 保证「删除文档后不再参与问答」（FR-1-05）与「同名替换不重复」（FR-1-06）。
@@ -536,7 +570,7 @@ class VectorStore(Protocol):
 @dataclass(frozen=True, slots=True)
 class Hit:
     chunk: Chunk
-    score: float            # 归一化相关度 0~1（Chroma 默认 L2 距离 → 转换为相似度）
+    score: float            # 余弦相似度 0~1（cosine 空间下 score = 1 - distance；向量已 L2 归一化，实测见 §1.4）
     snippet: str            # 截断后的展示片段（≤200 字）
 
 async def retrieve(query: str, *, top_k: int, min_score: float) -> RetrievalResult:
@@ -546,8 +580,8 @@ async def retrieve(query: str, *, top_k: int, min_score: float) -> RetrievalResu
 **检索流程**：
 1. query 向量化 → Chroma `query(top_k * 2)`（过采样）。
 2. **同源去重**：同一 `doc_id` 最多保留 3 块，避免单篇文档霸榜导致其他文档召不回。
-3. 距离→相似度归一化：`score = 1 / (1 + distance)`。
-4. **阈值过滤**：`score < retrieval_min_score`(0.35) 全部丢弃。
+3. 距离→相似度：cosine 空间下 **`score = 1 - distance`，score 即余弦相似度**。🔴 **弃用原设计的 `1/(1+distance)`**——该变换把分数压进 (0,1] 且不可解释，无法与实测的余弦基线（§1.4）对齐，调阈值只能靠猜。
+4. **阈值过滤**：`score < retrieval_min_score`(0.55) 全部丢弃。🔴 该值由实测标定：不相关中文文本余弦≈**0.48**（噪声地板）、正确命中≈**0.71**。**原设计的 0.35 低于噪声地板，等于不过滤，已废弃。**
 5. 取前 `top_k`(8) 返回。
 
 **拒答双保险（FR-2-08/09）**：
@@ -559,7 +593,13 @@ async def retrieve(query: str, *, top_k: int, min_score: float) -> RetrievalResu
 | **L3 后校验** | LLM 返回内容但**无任何 `[n]` 引用** | 判定为可能幻觉 → 降级为拒答话术，并记 `refused_by="no_citation"` 日志（供后续调优） |
 
 > L1 省下无谓的 LLM 调用（成本 + 延迟），L2 处理「检索到了但不相关」的灰色地带，L3 兜住模型不听话的情况。三层都有独立单测。
-> 阈值 0.35 需用真实语料调参，会做成环境变量便于面试现场演示调优效果。
+> 🔴 **阈值必须标定，不能拍脑袋**（R16）。实测发现 BGE 类模型的中文语义空间存在各向异性：**任意两段不相关中文的余弦基线就有 ~0.48**，因此绝对阈值的可用窗口其实很窄（约 0.50~0.70），随手写个 0.3/0.35 等于没过滤。四条对策：
+> ① 阈值做成环境变量，便于面试现场演示调优效果；
+> ② **M3 增加标定脚本** `backend/dev_tools/calibrate_threshold.py`：用真实语料构造「相关对 / 不相关对」两组样本，输出分数分布直方图与建议分界点，避免凭感觉定值；
+> ③ 除绝对阈值外辅以**相对间隔判据**——`top1 - mean(top_k) < margin` 时也判为「检索不可靠」，降低单一绝对阈值的脆弱性；
+> ④ Evals（M10）对阈值做回归，防止调好一处坏一处。
+>
+> 注：本次 0.48 / 0.71 是在**短样本**上测得的。真实语料的分块更长、且同属公司制度领域，语义更相近，**噪声地板预计会更高**（可能到 0.6+）。所以 0.55 只是起点，**必须以 ② 的标定结果为准**。
 
 **敏感信息拒答（FR-2-10）**：`refusal.py` 维护一个敏感意图正则表（家庭住址、身份证号、银行卡、薪资明细、病历等），命中则直接拒答，不进入检索。这条针对验收题 7.4-8「CEO 的家庭住址」。
 
@@ -1283,20 +1323,23 @@ services:
 | # | 风险 | 概率 | 影响 | 应对 |
 |---|---|---|---|---|
 | R1 | **拿不到钉钉开发者凭证**（需企业管理员权限） | 中 | 🔴 致命（淘汰项） | ① 用个人钉钉创建「测试企业」（免费、可自建应用）；② 早期就并行推进，不等代码写完；③ 保留 Web 聊天 + MockAdapter 降级演示 |
-| R2 | 检索阈值调不好：要么啥都答，要么啥都拒 | 高 | 🟠 18 分受影响 | ① 阈值做成环境变量；② 写 Evals 脚本（20+ case）批量回归；③ 同源去重 + 过采样已降低噪声 |
+| R2 | 检索阈值调不好：要么啥都答，要么啥都拒 | 高 | 🟠 18 分受影响 | ① 阈值做成环境变量；② 写 Evals 脚本（20+ case）批量回归；③ 同源去重 + 过采样已降低噪声；④ 🔴 **实测已证明可用窗口很窄**（不相关基线 0.48 / 正确命中 0.71），必须用 `calibrate_threshold.py` 按真实语料标定，并辅以相对间隔判据（见 R16） |
 | R3 | 模型不听话：该调工具时直接编答案 | 中 | 🟠 | ① System Prompt 硬约束「必须先调工具」；② L3 后校验（无引用即降级）；③ 工具 description 措辞迭代；④ 选工具调用能力强的模型（qwen-plus/glm-4 级别以上） |
 | R4 | 相对时间算错（「上周」区间错） | 高 | 🟠 验收题 7.2-5/7.3-7 | ① 当前时间注入 system prompt；② `get_current_time` 描述强制「先确定基准」；③ 单测覆盖日期推算 |
 | R5 | Windows 下 `scripts/*.sh` 跑不起来 | 中 | 🟠 工程化失分 | ① 全程用 Git Bash（本机已确认 `E:\Apps\Git\bin\bash.exe`）；② 脚本用 `#!/usr/bin/env bash` + `set -euo pipefail`，避免 bashism；③ README 写明「Windows 请在 Git Bash 中执行」；④ 提供 Docker 备选路径 |
 | R6 | 单文件超 500 行 | 中 | 🟠 底线失分 | ① 设计阶段就按功能细拆（见 §3）；② `check_limits.sh` 纳入 `test.sh` 门禁；③ orchestrator 等长文件预留拆分点 |
 | R7 | Chroma 版本 API 变动 | 低 | 🟡 | `VectorStore` Protocol 隔离，替换成本局限于 1 个文件 |
-| R8 | Embedding 与 Chat 供应商不一致导致跨供应商不兼容 | 中 | 🟡 | 向量库记录 `embed_model`，切换模型时提示需重建索引；提供 `reindex` 接口 |
+| R8 | Embedding 与 Chat 供应商不一致导致跨供应商不兼容 | 中 | 🟡 | **本项目已是刻意分离**（chat 走云端 / embed 走本地，见 ADR-15），不存在「同一把 key 必须同时提供 chat 与 embedding」的隐含假设。向量库记录 `embed_model` + `embed_dim`，切换模型时提示需重建索引；提供 `reindex` 接口。降级备选：本机 `bge-base-zh-v1.5`（768 维） |
 | R9 | 网络超时影响 push / clone | **已实测发生** | 🟡 | **已定位并解决**：本机 `git push` 走 HTTPS + HTTP/2 时**必现** `Recv failure: Connection was reset`（exit 128），而 TCP 443 本身是通的 → 降级到 **HTTP/1.1** 后立即成功。已执行 `git config http.version HTTP/1.1`（仓库级配置）。**M0 若重建仓库必须重跑这条命令**，已写入 DEV_PLAN M0 任务清单。另：分批小步提交，降低单次 push 体积 |
 | R10 | **钉钉普通消息不可编辑**，占位后无法「原地更新」为正式答案 | **已确认必然发生** | 🟠 影响 FR-4-10 实现方式 | 定稿为「占位 + 追加」**两条消息**方案（§4.6.3 方案 A）；单卡片流式刷新降为 P2 加分项，M11 视时间做，且需提前申请卡片模板 ID |
 | R11 | 截图、录屏、语料等**资源文件触发 `check_limits.sh` 误报超限** | 中 | 🟠 底线自查假阳性 | 脚本统计范围限定为代码文件（§3 约定 3）；资源统一放 `docs/screenshots/`；该约定写进 README「工程规范」小节，避免评审歧义 |
 | R12 | `scripts/` 已达 **8 文件上限**，后续想加脚本即超限 | 中 | 🟠 底线失分 | 新增脚本前先尝试合并（如 `acceptance_check.sh` 并入 `test.sh --acceptance`）；确需新增则建 `scripts/dev/` 子目录 |
-| **R13** | 🔴 **实测确认：token-plan 端点不提供任何 embedding 模型（`/models` 23 个全量中无一），且该 key 打标准 DashScope 返回 401** | **高 · 阻塞 M3** | 已探测 5 项并记录于 TDD §1.3 / §1.4；`EmbeddingProvider` 做成 Protocol，支持「云端 API」与「本地 ONNX（`bge-small-zh-v1.5`）」双实现，`.env` 用 `EMBEDDING_PROVIDER` 一键切换；**待你在方案 A / B 间拍板** |
+| **R13** | 🔴 token-plan 端点不提供任何 embedding 模型（`/models` 23 个全量中无一），且该 key 打标准 DashScope 返回 401 | ~~高~~ → ✅ **已消除** | ~~阻塞 M3~~ 已解除 | **改用本机已有的 BGE-M3 独立服务**（`http://127.0.0.1:8001/v1/embeddings`，OpenAI 兼容）。实测：`dim=1024`、`L2norm=1`、批量 4 条 278ms(GPU)、语义排序正确（命中 0.71 vs 不相关 0.48）。backend **零新增重依赖**（复用 `openai.AsyncOpenAI` 只换 `base_url`），torch 隔离在服务自己的 venv。详见 §1.4 |
 | **R14** | 🔴 **实测确认：`qwen3.8-max` 是推理模型，流式下 `reasoning_content` chunk 先于 `content` 到达** | 中 | SSE 解析器分离两类 delta，仅 `content` 进答案；`reasoning_content` 映射为 `{type:"reasoning"}` 帧供 Web 折叠展示、IM 忽略。**否则钉钉会输出英文思考过程** |
 | **R15** | 🔴 **实测确认：流式模式下 `usage` 恒为 `null`** | 中 | 流式请求默认携带 `stream_options={"include_usage": true}`；M5 增加断言测试「流式路径 `total_tokens > 0`」，防止成本字段**静默落 0** |
+| **R16** | 🔴 **实测发现：完全不相关的中文文本之间余弦基线高达 ~0.48**（BGE 语义空间各向异性），原设计 `retrieval_min_score=0.35` **低于噪声地板，拒答 L1 层形同虚设** | **高（已实测证实）** | 🟠 18 分 + FR-2-08/09 | ① 默认阈值改为 **0.55**；② M3 增加 `backend/dev_tools/calibrate_threshold.py`，用真实语料的「相关对/不相关对」输出分数分布直方图与建议分界点；③ 辅以**相对间隔判据** `top1 - mean(top_k) < margin`；④ score 改用可解释的 `1 - cosine_distance`（弃用 `1/(1+d)`）；⑤ M10 Evals 对阈值做回归。详见 §4.4.4 |
+| **R17** | 🟠 **项目依赖一个外部本地服务**（bge-m3 @ `:8001`），仓库无法自包含 2.2 GB 权重；换机器 / 现场演示若忘记启动则检索全挂 | 中 | 🟠 演示失败 | ① 服务代码副本收进 `backend/dev_tools/embedding_service.py`（注明来源），可一键起；② README「快速开始」把它列为**前置步骤**；③ backend 启动时打 `/health`，不可达则输出**可操作**报错（含启动命令）而非静默失败；④ `loaded:false`（模型加载中）按「稍后重试」处理，不判为故障；⑤ 降级备选 `bge-base-zh-v1.5` |
+
 
 
 ---
@@ -1321,7 +1364,7 @@ services:
 | **ADR-12** | **前端上传状态用轮询而非 WebSocket** | 秒级低频变更，轮询足够且实现简单 | 有 1.5 s 延迟，可接受 |
 | **ADR-13** | **IM 占位消息采用「占位 + 追加」两条消息，不做原地编辑** | 钉钉普通消息 SDK 不支持编辑已发送内容（R10 已确认）。两条消息实现成本最低、无额外凭证依赖 | 失败场景下用户会看到两条消息；卡片流式刷新（更好的体验）延后到 M11 作为加分项 |
 | **ADR-14** | **`check_limits.sh` 只统计代码文件**（`.py/.ts/.tsx/.js/.jsx`），资源与文档不计入 | 题目原意是约束**代码**可读性；截图/语料若计入会导致验收材料越多越「超限」的荒谬结果 | 需在 README 显式说明该约定，避免评审者按不同口径复核（已列入 M12 任务） |
-| **ADR-15** | **`EmbeddingProvider` 独立于 `LLMProvider`，做成可热切换的双实现（云端 API / 本地 ONNX）** | 🔴 由实测倒逼：拿到的 token-plan 端点**不提供任何 embedding 模型**，且该 key 打标准 DashScope 返回 401（§1.3 探测 2、3）。若把 embed 与 chat 绑死在同一个 client 上，M3 会直接卡死 | 多写一个 ~120 行的本地实现 + 首次需下载 ~95 MB 模型。**但换来一条宝贵的容错路径**：现场断网时可 `EMBEDDING_PROVIDER=local` 立即切换继续演示 RAG |
+| **ADR-15** | **Embedding 与 Chat 走两套 `base_url`：chat 用云端 token-plan（`qwen3.8-max`），embed 用本机 BGE-M3 独立服务（`127.0.0.1:8001`）** | 🔴 由实测倒逼：token-plan 端点**不提供任何 embedding 模型**，且该 key 打标准 DashScope 返回 401（§1.3 探测 2、3）。而本机已有现成的 OpenAI 兼容 bge-m3 服务，实测 `dim=1024`、L2 归一化、语义排序正确、GPU 下批量 4 条仅 278ms | backend 依赖一个**外部本地服务**，仓库无法自包含 2.2 GB 权重（对策见 R17）。**换来三条实打实的收益**：① backend `.venv` 不含 torch，保持轻量、安装快；② embedding **完全离线**，现场断网也能演示 RAG；③ 故障域清晰，embedding 挂了不影响 backend 启动 |
 | **ADR-16** | **推理模型的 `reasoning_content` 显式建模为一等公民（独立 SSE 帧 `{type:"reasoning"}`），而非解析时丢弃** | 实测 `qwen3.8-max` 是推理模型且 reasoning chunk **先于** content 到达（§1.3 坑 1）。显式建模才能：① 保证答案不被污染；② Web 端可折叠展示思考过程（工程细节加分）；③ `reasoning_tokens` 能被正确计入成本 | 帧协议多一种类型，前端与 IM 都要显式声明「忽略 reasoning」 |
 
 
@@ -1352,9 +1395,9 @@ evals/
 
 | # | 问题 | 我的倾向 |
 |---|---|---|
-| 1 | LLM 供应商最终选哪家（通义 / 智谱 / DeepSeek+第三方embedding） | 通义 DashScope：chat + embedding 同一 key，兼容性最好 |
+| 1 | ~~LLM 供应商最终选哪家（通义 / 智谱 / DeepSeek+第三方embedding）~~ → ✅ **已定（实测通过）** | **Chat**：阿里云 MaaS token-plan 端点 + `qwen3.8-max`（chat / tool_call / stream 三项实测全 200）。**Embedding**：本机 BGE-M3 独立服务（§1.4）。同一把 key 还可用 `deepseek-v4-pro` / `glm-5.3` 等 16 个文本模型，M11「多模型适配」零成本达成 |
 | 2 | 分块大小 600 字符 / 重叠 80 是否合适 | 先用此值，靠 Evals 调参 |
-| 3 | 拒答阈值 0.35 | 同上，做成环境变量便于现场演示调优 |
+| 3 | ~~拒答阈值 0.35~~ → ✅ **已修正为 0.55** | 🔴 实测发现不相关中文文本的余弦基线就有 **~0.48**，**0.35 低于噪声地板 = 不过滤**（R16）。0.55 只是起点，M3 需用 `calibrate_threshold.py` 按真实语料的分数分布定稿；同时 score 口径从 `1/(1+d)` 改为可解释的 `1 - cosine_distance`（§4.4.4） |
 | 4 | 后台是否需要登录 | 不做（ADR-11） |
 | 5 | 是否做飞书第二 adapter | 做，但排在所有 P0 之后（M11） |
 | 6 | 单目录 ≤8 文件的「文件」是否含子目录 / 是否含资源文件 | **已定稿**（见 §3 三条约定 + ADR-14）：只数直接子文件、不含子目录；`check_limits.sh` 只统计代码文件；README 显式说明该口径 |

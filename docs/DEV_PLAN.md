@@ -90,7 +90,7 @@ M0 → M1 → M2 → M3 → M6 → M7 → M9(钉钉) → M12(验收)
 | 任务 | 何时做 | 谁做 | 阻塞什么 |
 |---|---|---|---|
 | **① 确定 LLM 供应商并拿到 API Key** | ✅ **Day 1 已完成** | 你（用户） | ~~M5 之后所有真实联调~~ → 凭证已到位，且 chat / tool_call / stream 三项**实测均 200**（TDD §1.3）。M5 不再被阻塞 |
-| **①-b 🔴 补一个 embedding 能力** | **立刻（阻塞 M3）** | 你（用户） | **M3 RAG 全部**。实测该 key **不提供任何 embedding 模型**（`/models` 23 个全量中无一），且打标准 DashScope 返回 **401**。二选一：**方案 A** 去阿里云百炼开一把普通 `sk-` Key 用 `text-embedding-v3`（约 5 分钟）；**方案 B** 改用本地 ONNX `bge-small-zh-v1.5`（我来实现，你无需操作）。详见 TDD §1.4 |
+| **①-b embedding 能力** | ✅ **已解决 · 无需你操作** | — | ~~阻塞 M3 RAG 全部~~ → **已解除**。复用你本机已有的 **BGE-M3 独立服务**（`http://127.0.0.1:8001/v1/embeddings`，OpenAI 兼容）。实测 `dim=1024`、`L2norm=1`、批量 4 条 278 ms(GPU)、语义排序正确（命中 0.71 vs 不相关 0.48）。**唯一要求**：演示 / 联调前确保该服务已启动——M0 会把服务代码副本收进 `backend/dev_tools/`，backend 启动时自检 `/health` 并给出可操作提示（TDD §1.4 / R17） |
 | **② 注册钉钉开发者 → 创建企业内部应用 → 拿 AppKey/AppSecret** | **Day 1~2** | 你（用户） | **M9（15 分 + 淘汰项）** |
 | ③ 钉钉后台：开启 Stream 模式、添加机器人能力、配置权限 | Day 2 | 你（用户） | M9 |
 | ④ 建一个钉钉测试群、把机器人拉进群 | Day 2 | 你（用户） | M9 验收 |
@@ -128,6 +128,8 @@ M0 → M1 → M2 → M3 → M6 → M7 → M9(钉钉) → M12(验收)
 - [ ] 确认 GitHub 仓库 `Lwr99204/xiaosu-ai-assistant` 为 **public**，本地 `origin` 指向正确
 - [ ] **执行 `git config http.version HTTP/1.1`**（仓库级）—— 本机走 HTTPS + HTTP/2 推送**必现** `Recv failure: Connection was reset`（exit 128），降级到 HTTP/1.1 后立即成功。**已实测验证**，见 TDD R9
 - [ ] 建完整目录树（按 TDD §3，含 `docs/screenshots/` 与 `backend/dev_tools/`；`evals/` 可留到 M11 再建），空目录放 `.gitkeep`
+- [ ] `backend/dev_tools/embedding_service.py`：**把本机已有的 bge-m3 embedding 服务代码收进仓库**（源：`E:\Models\bge-m3-service\app.py`，README 注明出处），使项目可复现。模型权重（2.2 GB）**不入库**，README 写明获取/放置方式（R17 / ADR-15）
+- [ ] `backend/dev_tools/README.md`：说明 dev_tools 是**开发期工具**、不进运行时，以及 embedding 服务的启动方式与端口 `8001`
 - [ ] 写 `.gitignore`：`.env`、`.venv/`、`__pycache__/`、`node_modules/`、`.next/`、`logs/*`（保留 `.gitkeep`）、`storage/`、`*.db`、`.pytest_cache/`、`dist/`、`.DS_Store`
 - [ ] 写 `.env.example`：与 `Settings` 字段一一对应，每项带中文注释与示例值（**只放占位符，绝不放真实 key**）
 - [ ] 写 `scripts/` **全部 8 个脚本**：`setup.sh`、`start.sh`、`stop.sh`、`test.sh`、`lint.sh`、`seed_data.sh`、`check_limits.sh`、`acceptance_check.sh`。除 `check_limits.sh` 外**此阶段只写骨架**（`#!/usr/bin/env bash` + `set -euo pipefail` + 变量区 + 步骤注释 + `echo` 占位），内容随里程碑填充
@@ -244,8 +246,19 @@ bash scripts/test.sh        # 全绿
   - **`char_start` / `char_end` 精确偏移**
   - 过短块合并
 - [ ] `app/rag/vector_store.py`：`VectorStore` Protocol + `ChromaStore`（含 `delete_by_doc`）
-- [ ] `app/rag/embedder.py`：批量向量化（分批 16）、失败重试 1 次
-- [ ] `app/rag/retriever.py`：过采样 top_k×2 → 同源去重（单文档 ≤3 块）→ 相似度归一化 → 阈值过滤
+  - 🔴 建 collection 时**显式指定 `metadata={"hnsw:space": "cosine"}`**（bge-m3 输出已 L2 归一化，实测 `L2norm=1`，cosine 下 `distance = 1 - cos`）
+  - collection 元数据写入 `embed_model` + `embed_dim`，加载时校验；不一致则报错提示需 `reindex`（R8）
+- [ ] `app/rag/embedder.py`：批量向量化（分批 16，实测 GPU 下 4 条 278 ms）、失败重试 1 次
+  - 🔴 走**本地 BGE-M3 服务** `http://127.0.0.1:8001/v1/embeddings`（OpenAI 兼容 → 复用 `AsyncOpenAI` **只换 `base_url`**，`api_key` 填占位串 `not-needed`）
+  - 🔴 调用前打 `GET /health`：`loaded:false` 表示**模型仍在加载**，应等待重试而非判为故障；端口不可达时打印**可操作**提示（含启动命令）而非静默失败（R17）
+  - 🔴 首次请求含 CUDA 预热（实测 **2.1 s**，之后毫秒级）→ 启动自检时**预热一次**，避免第一个提问的用户莫名卡顿
+  - ⚠️ 该服务返回的 `usage.prompt_tokens` 实为**字符数**而非真 token（`len(str(t))`）→ embedding 成本一律记 **0 元**，**不得混入** LLM 成本统计，否则 FR-5-10 失真
+- [ ] `app/rag/retriever.py`：过采样 top_k×2 → 同源去重（单文档 ≤3 块）→ **`score = 1 - cosine_distance`** → 阈值过滤（默认 **0.55**）
+  - 🔴 **弃用原设计的 `1/(1+distance)`**：该变换不可解释、无法与实测余弦基线对齐，调阈值只能靠猜（§4.4.4）
+  - 🔴 除绝对阈值外，增加**相对间隔判据** `top1 - mean(top_k) < margin` → 亦判为「检索不可靠」，降低单一阈值的脆弱性（R16）
+- [ ] 🔴 `backend/dev_tools/calibrate_threshold.py`：**阈值标定脚本**。用真实语料构造「相关对 / 不相关对」两组样本，输出分数分布直方图与建议分界点，据此定稿 `retrieval_min_score`
+  - 背景：实测**完全不相关的中文文本之间余弦基线就有 ~0.48**，原设计的 `0.35` **低于噪声地板 = 完全不过滤**，拒答 L1 层形同虚设（R16）
+  - ⚠️ 本次 0.48 / 0.71 测自**短样本**；真实语料分块更长、同属公司制度领域，**噪声地板预计更高（可能 0.6+）**，故 0.55 仅为起点，**以本脚本的标定结果为准**
 - [ ] `app/rag/citations.py`：`[n]` 解析 → `Citation`（含偏移）+ 越界编号忽略
 - [ ] **测试重点**（≥20 条）：
   - `test_chunking.py` 8 条，**核心断言：`raw.content[c.char_start:c.char_end]` 归一化后等于 `c.text`**
@@ -253,23 +266,34 @@ bash scripts/test.sh        # 全绿
 
 **验收动作**
 ```bash
+# ── 前置：另开一个终端，启动本地 embedding 服务（M3 起为硬依赖，见 R17）──
+python backend/dev_tools/embedding_service.py     # 或直接跑 E:\Models\bge-m3-service\start_service.ps1
+curl -s http://127.0.0.1:8001/health              # 期望 {"status":"ok","model":"bge-m3","loaded":true}
+                                                  # loaded:false = 模型仍在加载，等几秒重试，不算故障
+
+# ── 主体 ──
 cd backend
 uv run python -m app.rag.chunking data/knowledge/员工手册.md   # CLI 调试入口，打印分块与 heading_path
 uv run python -c "
 import asyncio; from app.rag.pipeline import index_file, retrieve
 asyncio.run(index_file('data/knowledge/员工手册.md'))
-print(asyncio.run(retrieve('员工每年有几天年假')))"              # 应命中 3.1 年假 章节
+print(asyncio.run(retrieve('员工每年有几天年假')))"              # 应命中 3.1 年假 章节，且 score 显著高于 0.55（实测正确命中≈0.71 / 不相关≈0.48）
+uv run python dev_tools/calibrate_threshold.py                 # 打印相关/不相关两组分数分布，据此定稿 retrieval_min_score
 bash scripts/test.sh
 ```
 
-**commit 计划（5 个）**
+**commit 计划（6 个）**
 1. `feat(rag): 实现多格式文档加载器与编码回退`
 2. `feat(rag): 实现结构化分块器，保留标题路径与原文偏移`
-3. `feat(rag): 接入 ChromaDB 并封装 VectorStore 协议`
-4. `feat(rag): 实现检索器（过采样/同源去重/阈值过滤）`
-5. `test(rag): 补充分块与检索单元测试，校验偏移可回溯`
+3. `feat(rag): 接入本地 bge-m3 embedding 服务与 ChromaDB 向量存储`
+4. `feat(rag): 实现检索器（过采样 / 同源去重 / 余弦阈值过滤）`
+5. `feat(rag): 补充阈值标定脚本，依据真实语料分数分布定稿 min_score`
+6. `test(rag): 补充分块与检索单元测试，校验偏移可回溯`
 
 **AI_USAGE 素材（重点记录，这是最能体现驾驭力的里程碑）**
+- 🔴 **（已实测发生，最有说服力的一条）AI 在设计阶段把 `retrieval_min_score` 拍成 `0.35`，数值看起来完全合理**；直到用真实 bge-m3 服务测出「**不相关中文文本的余弦基线就有 0.48**」，才发现该阈值**低于噪声地板、等于没过滤**，拒答 L1 层形同虚设、幻觉防线直接失守 → 改为 `0.55` 并新增标定脚本 + 相对间隔判据。**教训：凡是有具体数值的超参，AI 给的都是「看起来合理」的猜测，必须用真实数据标定后才能写死。**
+- 🔴 **（已实测发生）AI 默认假设「OpenAI 兼容端点必然同时提供 chat 与 embedding」**，据此把两者绑在同一个 client 上；实测该端点 `/models` 返回的 23 个模型里**没有任何 embedding 模型**（`/embeddings` 三个模型名全 404），且这把 key **不能跨端点复用**（打标准 DashScope 返回 401）→ 架构改为 chat / embed **双 `base_url`**（ADR-15），embed 落到本机 BGE-M3 服务。**教训：供应商能力必须用 `/models` + 真实请求验证，不能靠「兼容 OpenAI 协议」这个名字去推断。**
+- 🔴 **（已实测发生）AI 不知道 `qwen3.8-max` 是推理模型**，按普通 chat 模型设计 SSE 解析；实测发现流式下 `delta.reasoning_content` 的 chunk **先于** `delta.content` 到达，若按常规写法无脑拼接，**钉钉里会先吐出一大段英文思考过程**（R14）。同时实测流式下 `usage` **恒为 `null`**，不加 `stream_options={"include_usage": true}` 则成本字段**静默落 0**（R15）。**教训：模型的「隐性行为」（是否推理、流式字段顺序、usage 是否补发）文档里常常不写，只能实测。**
 - AI 初版分块器**丢失字符偏移** → 我发现前端无法高亮 → 改为 `finditer` 记录 span（TDD §4.4.2 已预埋此案例）
 - AI 常用 `len(text.split())` 估算中文长度 → **中文没有空格，会严重低估**，必须用 `len(text)`
 - AI 给的 Chroma `where` 删除语法在不同版本有差异 → 需查官方文档确认
