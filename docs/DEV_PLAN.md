@@ -127,6 +127,7 @@ M0 → M1 → M2 → M3 → M6 → M7 → M9(钉钉) → M12(验收)
 **任务清单**
 - [ ] 确认 GitHub 仓库 `Lwr99204/xiaosu-ai-assistant` 为 **public**，本地 `origin` 指向正确
 - [ ] **执行 `git config http.version HTTP/1.1`**（仓库级）—— 本机走 HTTPS + HTTP/2 推送**必现** `Recv failure: Connection was reset`（exit 128），降级到 HTTP/1.1 后立即成功。**已实测验证**，见 TDD R9
+  - ⚠️ **但 HTTP/1.1 必要而不充分**：实测同配置下仍会偶发 `Connection was reset` / `Failed to connect to github.com:443 after 21093 ms`，**原样重试第 2 次即成功**。故约定：**push 失败先自动重试（≤8 次、间隔 6 s）再判定为真失败**，不要一报错就去改配置瞎折腾
 - [ ] 建完整目录树（按 TDD §3，含 `docs/screenshots/` 与 `backend/dev_tools/`；`evals/` 可留到 M11 再建），空目录放 `.gitkeep`
 - [ ] `backend/dev_tools/embedding_service.py`：**把本机已有的 bge-m3 embedding 服务代码收进仓库**（源：`E:\Models\bge-m3-service\app.py`，README 注明出处），使项目可复现。模型权重（2.2 GB）**不入库**，README 写明获取/放置方式（R17 / ADR-15）
 - [ ] `backend/dev_tools/README.md`：说明 dev_tools 是**开发期工具**、不进运行时，以及 embedding 服务的启动方式与端口 `8001`

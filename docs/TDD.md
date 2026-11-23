@@ -1330,7 +1330,7 @@ services:
 | R6 | 单文件超 500 行 | 中 | 🟠 底线失分 | ① 设计阶段就按功能细拆（见 §3）；② `check_limits.sh` 纳入 `test.sh` 门禁；③ orchestrator 等长文件预留拆分点 |
 | R7 | Chroma 版本 API 变动 | 低 | 🟡 | `VectorStore` Protocol 隔离，替换成本局限于 1 个文件 |
 | R8 | Embedding 与 Chat 供应商不一致导致跨供应商不兼容 | 中 | 🟡 | **本项目已是刻意分离**（chat 走云端 / embed 走本地，见 ADR-15），不存在「同一把 key 必须同时提供 chat 与 embedding」的隐含假设。向量库记录 `embed_model` + `embed_dim`，切换模型时提示需重建索引；提供 `reindex` 接口。降级备选：本机 `bge-base-zh-v1.5`（768 维） |
-| R9 | 网络超时影响 push / clone | **已实测发生** | 🟡 | **已定位并解决**：本机 `git push` 走 HTTPS + HTTP/2 时**必现** `Recv failure: Connection was reset`（exit 128），而 TCP 443 本身是通的 → 降级到 **HTTP/1.1** 后立即成功。已执行 `git config http.version HTTP/1.1`（仓库级配置）。**M0 若重建仓库必须重跑这条命令**，已写入 DEV_PLAN M0 任务清单。另：分批小步提交，降低单次 push 体积 |
+| R9 | 网络超时影响 push / clone | **已实测发生（两轮）** | 🟡 | **① 已定位并缓解**：本机 `git push` 走 HTTPS + HTTP/2 时**必现** `Recv failure: Connection was reset`（exit 128），而 TCP 443 本身是通的 → 降级到 **HTTP/1.1** 后立即成功。已执行 `git config http.version HTTP/1.1`（仓库级配置），**M0 若重建仓库必须重跑这条命令**（已写入 DEV_PLAN M0）。**② 🔴 但 HTTP/1.1 必要而不充分**：同一配置下后续仍实测到 `Recv failure: Connection was reset` 与 `Failed to connect to github.com:443 after 21093 ms`，而**原样重试第 2 次即成功**（`1fdeb18..b2bfeb5`）→ 说明本机到 GitHub 的连接**间歇性不稳**，与协议版本无关。**结论：push 必须带自动重试（实测 ≤8 次 / 间隔 6 s 足够），失败先重试、不要一报错就改配置。** ③ 另：分批小步提交，降低单次 push 体积与失败代价 |
 | R10 | **钉钉普通消息不可编辑**，占位后无法「原地更新」为正式答案 | **已确认必然发生** | 🟠 影响 FR-4-10 实现方式 | 定稿为「占位 + 追加」**两条消息**方案（§4.6.3 方案 A）；单卡片流式刷新降为 P2 加分项，M11 视时间做，且需提前申请卡片模板 ID |
 | R11 | 截图、录屏、语料等**资源文件触发 `check_limits.sh` 误报超限** | 中 | 🟠 底线自查假阳性 | 脚本统计范围限定为代码文件（§3 约定 3）；资源统一放 `docs/screenshots/`；该约定写进 README「工程规范」小节，避免评审歧义 |
 | R12 | `scripts/` 已达 **8 文件上限**，后续想加脚本即超限 | 中 | 🟠 底线失分 | 新增脚本前先尝试合并（如 `acceptance_check.sh` 并入 `test.sh --acceptance`）；确需新增则建 `scripts/dev/` 子目录 |
