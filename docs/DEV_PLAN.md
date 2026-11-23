@@ -131,25 +131,25 @@ M0 → M1 → M2 → M3 → M6 → M7 → M9(企微) → M12(验收)
 > **范围界定**：M0 交付的是**骨架**，不是可用的启动链路。`scripts/start.sh` / `setup.sh` 等在 M0 只需存在、语法正确、步骤注释齐全；「克隆后一条命令启动」（FR-6-01）的真正验收点在 **M10**。
 
 **任务清单**
-- [ ] 确认 GitHub 仓库 `Lwr99204/xiaosu-ai-assistant` 为 **public**，本地 `origin` 指向正确
-- [ ] **执行 `git config http.version HTTP/1.1`**（仓库级）—— 本机走 HTTPS + HTTP/2 推送**必现** `Recv failure: Connection was reset`（exit 128），降级到 HTTP/1.1 后立即成功。**已实测验证**，见 TDD R9
+- [x] 确认 GitHub 仓库 `Lwr99204/xiaosu-ai-assistant` 为 **public**，本地 `origin` 指向正确
+- [x] **执行 `git config http.version HTTP/1.1`**（仓库级）—— 本机走 HTTPS + HTTP/2 推送**必现** `Recv failure: Connection was reset`（exit 128），降级到 HTTP/1.1 后立即成功。**已实测验证**，见 TDD R9
   - ⚠️ **但 HTTP/1.1 必要而不充分**：实测同配置下仍会偶发 `Connection was reset` / `Failed to connect to github.com:443 after 21093 ms`，**原样重试第 2 次即成功**。故约定：**push 失败先自动重试（≤8 次、间隔 6 s）再判定为真失败**，不要一报错就去改配置瞎折腾
-- [ ] 建完整目录树（按 TDD §3，含 `docs/screenshots/` 与 `backend/dev_tools/`；`evals/` 可留到 M11 再建），空目录放 `.gitkeep`
-- [ ] `backend/dev_tools/embedding_service.py`：**把本机已有的 bge-m3 embedding 服务代码收进仓库**（源：`E:\Models\bge-m3-service\app.py`，README 注明出处），使项目可复现。模型权重（2.2 GB）**不入库**，README 写明获取/放置方式（R17 / ADR-15）
-- [ ] `backend/dev_tools/README.md`：说明 dev_tools 是**开发期工具**、不进运行时，以及 embedding 服务的启动方式与端口 `8001`
-- [ ] 写 `.gitignore`：`.env`、`.venv/`、`__pycache__/`、`node_modules/`、`.next/`、`logs/*`（保留 `.gitkeep`）、`storage/`、`*.db`、`.pytest_cache/`、`dist/`、`.DS_Store`
-- [ ] 写 `.env.example`：与 `Settings` 字段一一对应，每项带中文注释与示例值（**只放占位符，绝不放真实 key**）
-- [ ] 写 `scripts/` **全部 8 个脚本**：`setup.sh`、`start.sh`、`stop.sh`、`test.sh`、`lint.sh`、`seed_data.sh`、`check_limits.sh`、`acceptance_check.sh`。除 `check_limits.sh` 外**此阶段只写骨架**（`#!/usr/bin/env bash` + `set -euo pipefail` + 变量区 + 步骤注释 + `echo` 占位），内容随里程碑填充
+- [x] 建完整目录树（按 TDD §3，含 `docs/screenshots/` 与 `backend/dev_tools/`；`evals/` 可留到 M11 再建），空目录放 `.gitkeep`
+- [x] `backend/dev_tools/embedding_service.py`：**把本机已有的 bge-m3 embedding 服务代码收进仓库**（源：`E:\Models\bge-m3-service\app.py`，README 注明出处），使项目可复现。模型权重（2.2 GB）**不入库**，README 写明获取/放置方式（R17 / ADR-15）
+- [x] `backend/dev_tools/README.md`：说明 dev_tools 是**开发期工具**、不进运行时，以及 embedding 服务的启动方式与端口 `8001`
+- [x] 写 `.gitignore`：`.env`、`.venv/`、`__pycache__/`、`node_modules/`、`.next/`、`logs/*`（保留 `.gitkeep`）、`storage/`、`*.db`、`.pytest_cache/`、`dist/`、`.DS_Store`
+- [x] 写 `.env.example`：与 `Settings` 字段一一对应，每项带中文注释与示例值（**只放占位符，绝不放真实 key**）
+- [x] 写 `scripts/` **全部 8 个脚本**：`setup.sh`、`start.sh`、`stop.sh`、`test.sh`、`lint.sh`、`seed_data.sh`、`check_limits.sh`、`acceptance_check.sh`。除 `check_limits.sh` 外**此阶段只写骨架**（`#!/usr/bin/env bash` + `set -euo pipefail` + 变量区 + 步骤注释 + `echo` 占位），内容随里程碑填充
   - ⚠️ **FR-6-01「一条命令启动」在 M0 不验收**：M0 只交付脚本骨架，该需求的完整实现与最终验收在 **M10**
   - ⚠️ `scripts/` 由此**达到 8 文件上限**，后续不得再往此目录加脚本（要加就并入现有脚本，或建 `scripts/dev/` 子目录，见 TDD R12）
-- [ ] `check_limits.sh` **在 M0 就完整实现**（纯文件遍历、零外部依赖，可立即当门禁用）：
+- [x] `check_limits.sh` **在 M0 就完整实现**（纯文件遍历、零外部依赖，可立即当门禁用）：
   - 扫描 `backend/**/*.py` 与 `frontend/src/**/*.{ts,tsx}`，行数 >500 报警
   - 扫描每个目录的**直接代码文件数** >8 报警
   - **统计范围限定代码文件**（`.py/.ts/.tsx/.js/.jsx`）；截图、录屏、`.md` 语料、`.pdf/.docx` 等资源与文档不计入（TDD ADR-14），避免 `docs/screenshots/` 触发假阳性
-- [ ] 写 `README.md` 骨架：项目名、一句话简介、技术栈表、目录结构、快速开始（占位）、Roadmap（占位）
-- [ ] 落定 `docs/PRD.md`、`docs/TDD.md`、`docs/DEV_PLAN.md`（即本三件套）
-- [ ] 配置 Git pre-commit 钩子：密钥扫描（正则 `sk-[A-Za-z0-9]{16,}`、`wecom.*secret`、`bot_secret`、长度 >20 的疑似 token）+ 跑 `check_limits.sh`
-- [ ] 建 `docs/ai_journal.md`（铁律 2 的素材本）；🔴 **首批必须补录设计阶段已真实发生的两条**（发生在 M0 之前，别等到 M12 靠回忆编）：① AI 断言「企业微信强制要求公网回调 URL」导致错选钉钉，复核后发现「智能机器人长连接」才是正解；② AI 检索到的 `aibot-python-sdk` 是内容农场仓库（README 18 字节 / `language:null` / 无 license），靠交叉核对才筛出可用的 `wecom-aibot-sdk-python`。详见 DEV_PLAN M9 素材与 TDD §1.5 / R18
+- [x] 写 `README.md` 骨架：项目名、一句话简介、技术栈表、目录结构、快速开始（占位）、Roadmap（占位）
+- [x] 落定 `docs/PRD.md`、`docs/TDD.md`、`docs/DEV_PLAN.md`（即本三件套）
+- [x] 配置 Git pre-commit 钩子：密钥扫描（正则 `sk-[A-Za-z0-9]{16,}`、`wecom.*secret`、`bot_secret`、长度 >20 的疑似 token）+ 跑 `check_limits.sh`
+- [x] 建 `docs/ai_journal.md`（铁律 2 的素材本）；🔴 **首批必须补录设计阶段已真实发生的两条**（发生在 M0 之前，别等到 M12 靠回忆编）：① AI 断言「企业微信强制要求公网回调 URL」导致错选钉钉，复核后发现「智能机器人长连接」才是正解；② AI 检索到的 `aibot-python-sdk` 是内容农场仓库（README 18 字节 / `language:null` / 无 license），靠交叉核对才筛出可用的 `wecom-aibot-sdk-python`。详见 DEV_PLAN M9 素材与 TDD §1.5 / R18
 
 **验收动作**
 ```bash
