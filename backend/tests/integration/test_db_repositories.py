@@ -12,8 +12,8 @@ from pathlib import Path
 import pytest
 
 from app.db.engine import connect, init_db
-from app.db.entities import ConversationRecord, ToolCallEntry
-from app.db.repositories import RESULT_SUMMARY_MAX, ConversationRepo, MessageRepo
+from app.db.entities import ConversationRecord, DocumentRecord, ToolCallEntry
+from app.db.repositories import RESULT_SUMMARY_MAX, ConversationRepo, DocumentRepo, MessageRepo
 
 pytestmark = pytest.mark.allow_hosts("127.0.0.1")
 
@@ -47,6 +47,22 @@ def make_record(
     )
 
 
+def make_document(doc_id: str, *, version: int = 1, updated_at: str = "2026-11-24T00:00:00+00:00") -> DocumentRecord:
+    return DocumentRecord(
+        doc_id=doc_id,
+        filename=doc_id,
+        ext="md",
+        byte_size=12,
+        content_hash=f"hash-{version}",
+        status="pending",
+        chunk_count=0,
+        version=version,
+        storage_path=f"storage/uploads/{doc_id}",
+        created_at="2026-11-24T00:00:00+00:00",
+        updated_at=updated_at,
+    )
+
+
 def test_init_db_creates_all_tables_idempotently(db_path: Path) -> None:
     """重复建表不报错（IF NOT EXISTS），且四张表都在。"""
     init_db(db_path)
@@ -62,6 +78,54 @@ def test_connection_pragmas_enabled(db_path: Path) -> None:
         foreign_keys = conn.execute("PRAGMA foreign_keys").fetchone()[0]
     assert str(journal_mode).lower() == "wal"
     assert foreign_keys == 1
+
+
+def test_document_repo_crud_and_status_transitions(db_path: Path) -> None:
+    repo = DocumentRepo(db_path)
+    record = make_document("handbook.md")
+
+    assert repo.find_by_doc_id(record.doc_id) is None
+    repo.upsert(record)
+    assert repo.find_by_doc_id(record.doc_id) == record
+
+    assert repo.mark_indexed(record.doc_id, chunk_count=7, indexed_at="2026-11-24T01:00:00+00:00")
+    indexed = repo.find_by_doc_id(record.doc_id)
+    assert indexed is not None
+    assert (indexed.status, indexed.chunk_count, indexed.error_message) == ("indexed", 7, None)
+
+    assert repo.mark_failed(record.doc_id, "embedding down")
+    failed = repo.find_by_doc_id(record.doc_id)
+    assert failed is not None
+    assert (failed.status, failed.error_message) == ("failed", "embedding down")
+
+    assert repo.delete(record.doc_id) is True
+    assert repo.delete(record.doc_id) is False
+    assert repo.find_by_doc_id(record.doc_id) is None
+
+
+def test_document_repo_upsert_restores_previous_record(db_path: Path) -> None:
+    """替换失败时，业务层可用一次 upsert 原子恢复完整旧记录。"""
+    repo = DocumentRepo(db_path)
+    original = make_document("handbook.md")
+    replacement = make_document("handbook.md", version=2)
+    repo.upsert(original)
+    repo.upsert(replacement)
+    assert repo.find_by_doc_id("handbook.md") == replacement
+    repo.upsert(original)
+    assert repo.find_by_doc_id("handbook.md") == original
+
+
+def test_document_repo_lists_newest_first_with_total(db_path: Path) -> None:
+    repo = DocumentRepo(db_path)
+    repo.upsert(make_document("old.md", updated_at="2026-11-24T00:00:00+00:00"))
+    repo.upsert(make_document("new.md", updated_at="2026-11-24T02:00:00+00:00"))
+
+    items, total = repo.list_paged(offset=0, limit=1)
+    assert total == 2
+    assert [item.doc_id for item in items] == ["new.md"]
+
+    with pytest.raises(ValueError):
+        repo.list_paged(limit=0)
 
 
 def test_recent_pairs_keeps_chronological_order_and_limit(db_path: Path) -> None:

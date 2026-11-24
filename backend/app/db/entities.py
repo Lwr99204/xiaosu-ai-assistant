@@ -10,6 +10,25 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
+@dataclass(frozen=True, slots=True)
+class DocumentRecord:
+    """documents 表一行；索引状态与原文件位置的持久化事实来源。"""
+
+    doc_id: str
+    filename: str
+    ext: str
+    byte_size: int
+    content_hash: str
+    status: str
+    chunk_count: int
+    version: int
+    created_at: str
+    updated_at: str
+    error_message: str | None = None
+    storage_path: str | None = None
+    indexed_at: str | None = None
+
+
 @dataclass(slots=True)
 class ConversationRecord:
     """conversations 表一行 = 一轮问答。字段与 schema.sql 一一对应。"""

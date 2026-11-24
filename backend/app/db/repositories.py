@@ -12,7 +12,7 @@ from contextlib import closing
 from pathlib import Path
 
 from app.db.engine import connect, now_iso
-from app.db.entities import ConversationRecord, QAPair, ToolCallEntry
+from app.db.entities import ConversationRecord, DocumentRecord, QAPair, ToolCallEntry
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,111 @@ INSERT INTO tool_calls (
   ok, error, latency_ms, created_at
 ) VALUES (?,?,?,?,?,?,?,?,?)
 """
+
+_UPSERT_DOCUMENT = """
+INSERT INTO documents (
+  doc_id, filename, ext, byte_size, content_hash, status, chunk_count, version,
+  error_message, storage_path, created_at, updated_at, indexed_at
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+ON CONFLICT(doc_id) DO UPDATE SET
+  filename=excluded.filename,
+  ext=excluded.ext,
+  byte_size=excluded.byte_size,
+  content_hash=excluded.content_hash,
+  status=excluded.status,
+  chunk_count=excluded.chunk_count,
+  version=excluded.version,
+  error_message=excluded.error_message,
+  storage_path=excluded.storage_path,
+  created_at=excluded.created_at,
+  updated_at=excluded.updated_at,
+  indexed_at=excluded.indexed_at
+"""
+
+
+def _document_from_row(row: object) -> DocumentRecord:
+    """sqlite3.Row 转内部实体，集中维护字段映射。"""
+    return DocumentRecord(
+        doc_id=row["doc_id"],  # type: ignore[index]
+        filename=row["filename"],  # type: ignore[index]
+        ext=row["ext"],  # type: ignore[index]
+        byte_size=row["byte_size"],  # type: ignore[index]
+        content_hash=row["content_hash"],  # type: ignore[index]
+        status=row["status"],  # type: ignore[index]
+        chunk_count=row["chunk_count"],  # type: ignore[index]
+        version=row["version"],  # type: ignore[index]
+        error_message=row["error_message"],  # type: ignore[index]
+        storage_path=row["storage_path"],  # type: ignore[index]
+        created_at=row["created_at"],  # type: ignore[index]
+        updated_at=row["updated_at"],  # type: ignore[index]
+        indexed_at=row["indexed_at"],  # type: ignore[index]
+    )
+
+
+class DocumentRepo:
+    """documents 表 CRUD；业务层负责原文件和向量的一致性编排。"""
+
+    def __init__(self, db_path: Path) -> None:
+        self._db_path = db_path
+
+    def find_by_doc_id(self, doc_id: str) -> DocumentRecord | None:
+        with closing(connect(self._db_path)) as conn:
+            row = conn.execute("SELECT * FROM documents WHERE doc_id = ?", (doc_id,)).fetchone()
+        return _document_from_row(row) if row is not None else None
+
+    def upsert(self, record: DocumentRecord) -> None:
+        """新增或完整恢复一条记录；替换失败回滚时也走同一原子语句。"""
+        values = (
+            record.doc_id,
+            record.filename,
+            record.ext,
+            record.byte_size,
+            record.content_hash,
+            record.status,
+            record.chunk_count,
+            record.version,
+            record.error_message,
+            record.storage_path,
+            record.created_at,
+            record.updated_at,
+            record.indexed_at,
+        )
+        with closing(connect(self._db_path)) as conn, conn:
+            conn.execute(_UPSERT_DOCUMENT, values)
+
+    def list_paged(self, *, offset: int = 0, limit: int = 50) -> tuple[list[DocumentRecord], int]:
+        """按最近更新时间倒序分页；返回当前页和总数。"""
+        if offset < 0 or limit <= 0:
+            raise ValueError("offset 必须 >= 0 且 limit 必须 > 0")
+        with closing(connect(self._db_path)) as conn:
+            total = int(conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0])
+            rows = conn.execute(
+                "SELECT * FROM documents ORDER BY updated_at DESC, doc_id LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+        return [_document_from_row(row) for row in rows], total
+
+    def mark_indexed(self, doc_id: str, *, chunk_count: int, indexed_at: str | None = None) -> bool:
+        timestamp = indexed_at or now_iso()
+        sql = (
+            "UPDATE documents SET status='indexed', chunk_count=?, error_message=NULL, "
+            "indexed_at=?, updated_at=? WHERE doc_id=?"
+        )
+        with closing(connect(self._db_path)) as conn, conn:
+            return conn.execute(sql, (chunk_count, timestamp, timestamp, doc_id)).rowcount == 1
+
+    def mark_failed(self, doc_id: str, error_message: str) -> bool:
+        timestamp = now_iso()
+        sql = (
+            "UPDATE documents SET status='failed', error_message=?, updated_at=? "
+            "WHERE doc_id=?"
+        )
+        with closing(connect(self._db_path)) as conn, conn:
+            return conn.execute(sql, (error_message, timestamp, doc_id)).rowcount == 1
+
+    def delete(self, doc_id: str) -> bool:
+        with closing(connect(self._db_path)) as conn, conn:
+            return conn.execute("DELETE FROM documents WHERE doc_id = ?", (doc_id,)).rowcount == 1
 
 
 class ConversationRepo:
