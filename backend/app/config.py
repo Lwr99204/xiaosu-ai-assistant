@@ -64,7 +64,8 @@ class Settings(BaseSettings):
     chunk_max_chars: int = 600
     chunk_overlap_chars: int = 80
     retrieval_top_k: int = 8
-    retrieval_min_score: float = 0.55  # 🔴 实测标定阈值，见 TDD §1.4 / R16
+    retrieval_min_score: float = 0.62  # 四份真实语料标定：正样本 ≥0.69，噪声最高 0.574
+    retrieval_min_spread: float = 0.01  # Q3 多个相关块接近时 spread=0.0105
 
     # ── Agent ──────────────────────────────────────────────────────
     agent_max_tool_rounds: int = 5  # FR-3-06

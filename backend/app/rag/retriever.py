@@ -35,7 +35,7 @@ DEFAULT_OVERSAMPLE = 2
 #: 同一文档最多保留的块数，防止一篇长文占满 top_k。
 DEFAULT_MAX_PER_DOC = 3
 #: top1 与命中均分的最小间隔，低于它判定检索不可靠。
-DEFAULT_MIN_SPREAD = 0.05
+DEFAULT_MIN_SPREAD = 0.01
 #: 喂给模型的摘要长度。比引用展示用的 200 字更长，年假三档天数这类细节才不会被截掉。
 DEFAULT_TOOL_SNIPPET_CHARS = 300
 DEFAULT_TOP_K = 8
@@ -194,4 +194,5 @@ def build_retriever(
         store=store,
         top_k=settings.retrieval_top_k,
         min_score=settings.retrieval_min_score,
+        min_spread=settings.retrieval_min_spread,
     )

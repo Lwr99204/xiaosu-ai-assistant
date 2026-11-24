@@ -6,8 +6,9 @@ from collections.abc import Sequence
 
 import pytest
 
+from app.config import Settings
 from app.rag.chunking import Chunk
-from app.rag.retriever import Retriever, hit_to_mapping
+from app.rag.retriever import Retriever, build_retriever, hit_to_mapping
 from app.rag.vector_store import Hit
 
 pytestmark = pytest.mark.allow_hosts("127.0.0.1")
@@ -75,7 +76,7 @@ async def test_search_oversamples_caps_each_doc_and_filters_threshold() -> None:
 
 @pytest.mark.asyncio
 async def test_search_marks_close_scores_as_unreliable() -> None:
-    store = _Store([_hit("a.md", 0, 0.70), _hit("b.md", 0, 0.69), _hit("c.md", 0, 0.68)])
+    store = _Store([_hit("a.md", 0, 0.70), _hit("b.md", 0, 0.695), _hit("c.md", 0, 0.69)])
     result = await Retriever(embedder=_Embedder(), store=store).search("制度", top_k=3)
     assert result.hits
     assert result.reliable is False
@@ -105,3 +106,16 @@ async def test_single_hit_is_reliable_and_mapping_keeps_offsets() -> None:
     assert mapping["char_start"] == 200
     assert mapping["char_end"] == 200 + len(hit.chunk.text)
     assert mapping["score"] == 0.77
+
+
+def test_build_retriever_reads_score_and_spread_from_settings() -> None:
+    settings = Settings(
+        _env_file=None,
+        llm_provider="mock",
+        llm_api_key="sk-test-1",
+        retrieval_min_score=0.63,
+        retrieval_min_spread=0.02,
+    )
+    retriever = build_retriever(settings, embedder=_Embedder(), store=_Store([]))
+    assert retriever._min_score == 0.63
+    assert retriever._min_spread == 0.02
