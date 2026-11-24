@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     chunk_max_chars: int = 600
     chunk_overlap_chars: int = 80
     retrieval_top_k: int = 8
-    retrieval_min_score: float = 0.62  # 四份真实语料标定：正样本 ≥0.69，噪声最高 0.574
+    retrieval_min_score: float = 0.63  # 标定中点 0.6314：正样本最低 0.6888，噪声最高 0.5741
     retrieval_min_spread: float = 0.01  # Q3 多个相关块接近时 spread=0.0105
 
     # ── Agent ──────────────────────────────────────────────────────
