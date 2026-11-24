@@ -88,6 +88,8 @@
 - [x] Chroma 余弦向量存储、内容哈希版本 ID、active manifest 原子切换与失败回滚。
 - [x] pipeline 编排、知识库工具接入、阈值拒答；引用校验只约束知识库来源。
 - [x] 4 份真实语料索引：78 chunks；Q1～Q3 命中正确文档且偏移可回溯。
+- [x] seed 导入统一经过 DocumentService：SQLite 4 条 indexed 记录与 Chroma 78 chunks
+  同步，后台列表不会出现“有向量、无文档”的孤儿状态。
 - [x] 真实语料阈值标定：相关最低 0.6888、不相关最高 0.5741，定稿
   `retrieval_min_score=0.63`、`retrieval_min_spread=0.01`。
 - [x] documents 元数据存储、multipart 上传/列表/详情/原文/删除/手动重建 API。

@@ -238,6 +238,9 @@
   `{doc-hash}/{content-hash}/{filename}` 保存，成功切换后才删旧文件。
 - **真实验收**：隔离存储下上传 `常见FAQ.md` 立即返回 pending，随后 indexed（27 chunks）；
   删除返回 27，列表归零。说明状态机、向量删除和 REST 协议在真实 BGE 服务上闭环。
+- **seed 一致性补洞**：旧 `index_knowledge.py` 直接调 pipeline，只写 Chroma；后台列表依赖
+  SQLite，因此会出现“问答能命中、管理员却看不到文档”。改为复用 DocumentService 后，
+  隔离环境实测 SQLite 4 条 indexed 与 Chroma 78 chunks 同步。
 - **结论**：评审异步任务不能只看“请求有没有阻塞”，还要看并发上限、停机排空和跨存储的
   一致性边界。
 

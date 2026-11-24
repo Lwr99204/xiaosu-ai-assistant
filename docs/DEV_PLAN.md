@@ -225,7 +225,7 @@ bash scripts/test.sh                                   # 全绿
   - **语料正文以 `.md` 为唯一真源**，`.pdf/.docx` 由脚本从对应 `.md` 转换生成 → 改内容只改一处，避免三份不同步
   - 生成的 `.pdf/.docx` **入库**（体积小、是验收所需语料）；字体文件不入库，脚本里注明获取方式
 - [x] `scripts/seed_data.sh`：把 `data/knowledge/*` 解析、分块、向量化并写入 Chroma
-- [ ] `scripts/seed_data.sh`：同步创建/更新 documents 状态记录（随文档管理 API 完成）
+- [x] `scripts/seed_data.sh`：通过 DocumentService 同步原文件、documents 状态记录与 Chroma；实测 4 条 indexed / 78 chunks
 - [ ] 测试：`test_repositories.py` ≥5 条（CRUD、分页、按 session 取历史、级联删除）
 
 **验收动作**
