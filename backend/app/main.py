@@ -20,6 +20,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.agent.orchestrator import build_orchestrator
+from app.api.documents import router as document_router
 from app.api.middleware import RequestContextMiddleware, install_exception_handlers
 from app.config import Settings, get_settings
 from app.db.repositories import MessageRepo
@@ -34,6 +35,7 @@ from app.mock_api.router import router as mock_router
 from app.rag.pipeline import RAGPipeline, build_pipeline
 from app.schemas.health import HealthComponent, HealthResponse, ImHealth, WecomHealth
 from app.services.agent_service import AgentService
+from app.services.document_service import DocumentService
 from app.tools import build_tool_registry
 
 logger = logging.getLogger(__name__)
@@ -119,6 +121,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.rag_ready = False
         app.state.rag_detail = "向量服务或索引不可用，请检查 127.0.0.1:8001 与 Chroma"
     app.state.rag_pipeline = rag_pipeline
+    document_service = (
+        DocumentService(settings=settings, pipeline=rag_pipeline) if rag_pipeline is not None else None
+    )
+    app.state.document_service = document_service
     app.state.agent_service = build_agent_service(settings, rag_pipeline)
     app.state.db_ready = True
     adapter = await start_im(app, settings)
@@ -127,6 +133,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         if adapter is not None:
             await adapter.stop()
+        if document_service is not None:
+            await document_service.drain()
         if rag_pipeline is not None:
             await rag_pipeline.close()
         logger.info("小苏后端关闭")
@@ -187,10 +195,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.settings = resolved
     app.state.store = get_store(resolved.mock_data_dir)
+    app.state.document_service = None
 
     app.add_middleware(RequestContextMiddleware)
     install_exception_handlers(app)
     app.include_router(mock_router)
+    app.include_router(document_router)
 
     @app.get("/api/health", response_model=HealthResponse, summary="健康检查")
     def health() -> HealthResponse:
