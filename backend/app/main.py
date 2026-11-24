@@ -21,6 +21,7 @@ from fastapi import FastAPI
 
 from app.agent.orchestrator import build_orchestrator
 from app.api.documents import router as document_router
+from app.api.logs import router as log_router
 from app.api.middleware import RequestContextMiddleware, install_exception_handlers
 from app.config import Settings, get_settings
 from app.db.repositories import MessageRepo
@@ -201,6 +202,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     install_exception_handlers(app)
     app.include_router(mock_router)
     app.include_router(document_router)
+    app.include_router(log_router)
 
     @app.get("/api/health", response_model=HealthResponse, summary="健康检查")
     def health() -> HealthResponse:

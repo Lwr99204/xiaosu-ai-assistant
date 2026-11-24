@@ -32,6 +32,9 @@ import pytest
 
 from app.api.middleware import REQUEST_ID_HEADER, UNEXPECTED_ERROR_CODE
 from app.config import REPO_ROOT, Settings
+from app.db.engine import init_db
+from app.db.entities import ConversationRecord, ToolCallEntry
+from app.db.repositories import ConversationRepo
 from app.main import APP_VERSION, create_app
 from app.mock_api.router import get_store
 
@@ -78,6 +81,56 @@ async def test_health_reports_unwired_components(client: httpx.AsyncClient) -> N
     assert body["db"]["status"] == "not_wired"
     assert body["im"]["wecom"]["enabled"] is False
     assert body["im"]["wecom"]["connected"] is False
+
+
+async def test_admin_log_list_detail_and_stats(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.sqlite_path = tmp_path / "storage" / "logs.db"
+    init_db(settings.sqlite_path)
+    repo = ConversationRepo(settings.sqlite_path)
+    conversation_id = repo.insert(
+        ConversationRecord(
+            request_id="req-log-1",
+            session_key="wecom:group:user",
+            platform="wecom",
+            user_id="user-1",
+            user_name="测试员工",
+            question="年假几天？",
+            answer="每年十天[1]",
+            citations_json=(
+                '[{"ref_no":1,"filename":"员工手册.md","snippet":"每年十天",'
+                '"char_start":10,"char_end":14,"score":0.8}]'
+            ),
+            model="mock-model",
+            prompt_tokens=100,
+            completion_tokens=20,
+            total_tokens=120,
+            cost_cny=0.12,
+            latency_ms=345,
+            created_at="2026-11-24T14:00:00+00:00",
+        )
+    )
+    repo.insert_tool_calls(
+        conversation_id,
+        [ToolCallEntry(1, "search_knowledge_base", '{"query":"年假"}', "命中员工手册", True)],
+    )
+    app = create_app(settings)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as test_client:
+        listing = await test_client.get("/api/logs?platform=wecom&has_tool_call=true")
+        assert listing.status_code == 200
+        assert listing.json()["items"][0]["tool_count"] == 1
+
+        detail = await test_client.get(f"/api/logs/{conversation_id}")
+        assert detail.status_code == 200
+        assert detail.json()["tool_calls"][0]["tool_name"] == "search_knowledge_base"
+        assert detail.json()["usage"]["total_tokens"] == 120
+        assert detail.json()["citations"][0]["char_start"] == 10
+
+        stats = await test_client.get("/api/logs/stats")
+        assert stats.status_code == 200
+        assert stats.json()["total"] == {"count": 1, "tokens": 120, "cost_cny": 0.12}
 
 
 # ── 员工查询（考题 Q4：员工 001 是哪个部门）───────────────────────
