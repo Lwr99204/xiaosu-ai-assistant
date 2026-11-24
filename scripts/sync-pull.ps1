@@ -31,22 +31,35 @@ Set-Location $repo
 Write-Output "======== START WORK ========"
 Write-Output "repo: $repo"
 
-& $git fetch origin 2>&1 | Out-Null
 $head = (& $git rev-parse --short HEAD)
-$remote = (& $git rev-parse --short origin/main)
-Write-Output "local  HEAD : $head"
-Write-Output "remote main : $remote"
+Write-Output "local HEAD: $head"
 
 $dirty = @(& $git status --porcelain)
 if ($dirty.Count -gt 0) {
-    Write-Output "uncommitted: $($dirty.Count) file(s) (will be autostashed during pull)"
+    Write-Output "uncommitted: $($dirty.Count) file(s) (autostashed during pull)"
 }
 
-if ($head -ne $remote) {
-    Write-Output "pulling from origin/main ..."
-    & $git pull --rebase --autostash origin main 2>&1 | Select-Object -Last 8
-} else {
-    Write-Output "already up to date"
+$pulled = $false
+for ($i = 1; $i -le 4; $i++) {
+    & $git fetch origin 2>&1 | Out-Null
+    $remote = (& $git rev-parse --short origin/main)
+    if ($head -eq $remote) {
+        Write-Output "already up to date (origin/main = $remote)"
+        $pulled = $true
+        break
+    }
+    Write-Output "pulling origin/main (attempt $i) ..."
+    & $git pull --rebase --autostash origin main 2>&1 | Select-Object -Last 6
+    if ($LASTEXITCODE -eq 0) { $pulled = $true; break }
+    Write-Output "pull failed (attempt $i), retry in $($i * 8)s"
+    Start-Sleep -Seconds ($i * 8)
+}
+
+if (-not $pulled) {
+    Write-Output "[WARN] cannot reach GitHub from this network."
+    Write-Output "  1) enable the proxy (LeiSu / Clash) and rerun 开工.bat, or"
+    Write-Output "  2) on the other machine: git bundle create x.bundle main"
+    Write-Output "     then here: git fetch x.bundle main ; git merge --ff-only FETCH_HEAD"
 }
 
 $uv = Find-Uv
