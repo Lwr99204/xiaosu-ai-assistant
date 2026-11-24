@@ -20,6 +20,9 @@ class _Embedder:
     async def embed(self, texts: Sequence[str]) -> list[list[float]]:
         return [[1.0, float(index)] for index, _ in enumerate(texts)]
 
+    async def warmup(self) -> None:
+        return None
+
 
 class _Store:
     def __init__(self, *, fail_upsert: bool = False) -> None:
@@ -46,6 +49,9 @@ class _Store:
 
     async def query(self, vector, *, top_k: int, where=None):
         return []
+
+    async def count(self) -> int:
+        return len(self.upserted)
 
 
 def _settings() -> Settings:
@@ -84,3 +90,10 @@ async def test_retrieve_rejects_empty_query() -> None:
     pipeline = RAGPipeline(settings=_settings(), embedder=_Embedder(), store=_Store())
     with pytest.raises(Exception, match="检索问题不能为空"):
         await pipeline.retrieve("   ")
+
+
+@pytest.mark.asyncio
+async def test_verify_ready_warms_embedder_and_counts_vectors() -> None:
+    store = _Store()
+    pipeline = RAGPipeline(settings=_settings(), embedder=_Embedder(), store=store)
+    assert await pipeline.verify_ready() == 0

@@ -31,6 +31,7 @@ from app.llm.factory import build_chat_provider
 from app.logging_setup import setup_logging
 from app.mock_api.repository import get_store
 from app.mock_api.router import router as mock_router
+from app.rag.pipeline import RAGPipeline, build_pipeline
 from app.schemas.health import HealthComponent, HealthResponse, ImHealth, WecomHealth
 from app.services.agent_service import AgentService
 from app.tools import build_tool_registry
@@ -46,13 +47,17 @@ APP_VERSION = "0.1.0"
 _NOT_WIRED = "本阶段尚未接入"
 
 
-def build_agent_service(settings: Settings) -> AgentService:
+def build_agent_service(
+    settings: Settings,
+    rag_pipeline: RAGPipeline | None = None,
+) -> AgentService:
     """组装 Agent 的唯一入口，IM 与 Web API 共用（TDD §4.5.1）。
 
-    知识库检索器要到 M4 才有真向量库，此处传 None：search_knowledge_base 仍会
-    注册，只是回答「知识库当前不可用」，工具清单在各里程碑之间保持稳定。
+    RAG 就绪时仅注入异步检索函数；tools 不 import rag，依赖方向保持为组合根同时
+    依赖两侧。RAG 启动失败时仍注册知识库工具，但明确返回「知识库当前不可用」。
     """
-    registry = build_tool_registry(settings)
+    knowledge_search = rag_pipeline.search_for_tool if rag_pipeline is not None else None
+    registry = build_tool_registry(settings, knowledge_search=knowledge_search)
     orchestrator = build_orchestrator(settings, build_chat_provider(settings), registry)
     return AgentService(settings=settings, orchestrator=orchestrator)
 
@@ -101,7 +106,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings.mock_data_dir,
         settings.log_dir,
     )
-    app.state.agent_service = build_agent_service(settings)
+    rag_pipeline: RAGPipeline | None = build_pipeline(settings)
+    try:
+        vector_count = await rag_pipeline.verify_ready()
+        app.state.rag_ready = True
+        app.state.rag_detail = f"embedding 与 Chroma 正常，当前 {vector_count} 个分块"
+        logger.info("RAG 管道就绪 vector_count=%d", vector_count)
+    except Exception as exc:
+        logger.error("RAG 管道启动检查失败 type=%s", type(exc).__name__)
+        await rag_pipeline.close()
+        rag_pipeline = None
+        app.state.rag_ready = False
+        app.state.rag_detail = "向量服务或索引不可用，请检查 127.0.0.1:8001 与 Chroma"
+    app.state.rag_pipeline = rag_pipeline
+    app.state.agent_service = build_agent_service(settings, rag_pipeline)
     app.state.db_ready = True
     adapter = await start_im(app, settings)
     try:
@@ -109,6 +127,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         if adapter is not None:
             await adapter.stop()
+        if rag_pipeline is not None:
+            await rag_pipeline.close()
         logger.info("小苏后端关闭")
 
 
@@ -117,6 +137,8 @@ def build_health(
     *,
     db_ready: bool = False,
     adapter: IMAdapter | None = None,
+    rag_ready: bool | None = None,
+    rag_detail: str | None = None,
 ) -> HealthResponse:
     """组装健康检查响应。
 
@@ -129,8 +151,14 @@ def build_health(
         status="ok",
         version=APP_VERSION,
         llm=HealthComponent(status="not_wired", detail=_NOT_WIRED),
-        embed=HealthComponent(status="not_wired", detail=_NOT_WIRED),
-        vector_store=HealthComponent(status="not_wired", detail=_NOT_WIRED),
+        embed=HealthComponent(
+            status="not_wired" if rag_ready is None else ("ok" if rag_ready else "down"),
+            detail=_NOT_WIRED if rag_ready is None else rag_detail,
+        ),
+        vector_store=HealthComponent(
+            status="not_wired" if rag_ready is None else ("ok" if rag_ready else "down"),
+            detail=_NOT_WIRED if rag_ready is None else rag_detail,
+        ),
         db=HealthComponent(
             status="ok" if db_ready else "not_wired",
             detail=str(settings.sqlite_path) if db_ready else _NOT_WIRED,
@@ -170,6 +198,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             resolved,
             db_ready=bool(getattr(app.state, "db_ready", False)),
             adapter=getattr(app.state, "im_adapter", None),
+            rag_ready=getattr(app.state, "rag_ready", None),
+            rag_detail=getattr(app.state, "rag_detail", None),
         )
 
     return app

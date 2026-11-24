@@ -99,10 +99,20 @@ class RAGPipeline:
             raise RAGError("检索问题不能为空", retryable=False)
         return await self._retriever.search(query, top_k=top_k)
 
+    async def search_for_tool(self, query: str, top_k: int) -> list[dict[str, object]]:
+        """供 services 组合根注入 knowledge 工具，不让 tools 反向依赖 rag。"""
+        return await self._retriever.search_for_tool(query, top_k)
+
     async def warmup(self) -> None:
+        """预热 embedding，避免首位用户承担模型初始化延迟。"""
         warmup = getattr(self._embedder, "warmup", None)
         if warmup is not None:
             await warmup()
+
+    async def verify_ready(self) -> int:
+        """启动期预热 embedding 并校验向量 collection，返回当前块数。"""
+        await self.warmup()
+        return await self._store.count()
 
     async def close(self) -> None:
         for component in (self._embedder, self._store):
