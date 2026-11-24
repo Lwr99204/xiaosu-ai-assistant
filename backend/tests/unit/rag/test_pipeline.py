@@ -47,6 +47,10 @@ class _Store:
         self.deleted.append(content_hash)
         return 1
 
+    async def delete_by_doc(self, doc_id: str) -> int:
+        self.deleted.append(doc_id)
+        return 3
+
     async def query(self, vector, *, top_k: int, where=None):
         return []
 
@@ -97,3 +101,14 @@ async def test_verify_ready_warms_embedder_and_counts_vectors() -> None:
     store = _Store()
     pipeline = RAGPipeline(settings=_settings(), embedder=_Embedder(), store=store)
     assert await pipeline.verify_ready() == 0
+
+
+@pytest.mark.asyncio
+async def test_delete_document_delegates_to_vector_store() -> None:
+    store = _Store()
+    pipeline = RAGPipeline(settings=_settings(), embedder=_Embedder(), store=store)
+    assert await pipeline.delete_document("制度.md") == 3
+    assert store.deleted == ["制度.md"]
+
+    with pytest.raises(Exception, match="文档 ID 不能为空"):
+        await pipeline.delete_document("  ")

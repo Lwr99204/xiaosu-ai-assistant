@@ -99,6 +99,13 @@ class RAGPipeline:
             raise RAGError("检索问题不能为空", retryable=False)
         return await self._retriever.search(query, top_k=top_k)
 
+    async def delete_document(self, doc_id: str) -> int:
+        """删除文档全部向量并撤销 active 版本，供文档服务统一编排。"""
+        normalized = doc_id.strip()
+        if not normalized:
+            raise RAGError("文档 ID 不能为空", retryable=False)
+        return await self._store.delete_by_doc(normalized)
+
     async def search_for_tool(self, query: str, top_k: int) -> list[dict[str, object]]:
         """供 services 组合根注入 knowledge 工具，不让 tools 反向依赖 rag。"""
         return await self._retriever.search_for_tool(query, top_k)
