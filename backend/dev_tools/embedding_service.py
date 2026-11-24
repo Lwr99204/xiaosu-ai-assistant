@@ -22,12 +22,20 @@
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import List, Union
+from typing import Any, List, Union
 
-import torch
+import numpy as np
+import onnxruntime as ort
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
-from sentence_transformers import SentenceTransformer
+from tokenizers import Tokenizer
+
+try:
+    import torch
+    from sentence_transformers import SentenceTransformer
+except ModuleNotFoundError:  # 临时开发机可用仓库模型自带的 ONNX 权重，无需下载 Torch
+    torch = None
+    SentenceTransformer = None
 
 MODEL_DIR = os.environ.get("BGE_MODEL_DIR", r"E:\Models\bge-m3")
 MODEL_NAME = "bge-m3"
@@ -36,7 +44,35 @@ PORT = int(os.environ.get("BGE_PORT", "8001"))
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("bge-m3-service")
 
-_model: SentenceTransformer = None  # type: ignore[assignment]
+_model: Any = None
+
+
+class OnnxSentenceTransformer:
+    """只实现本服务所需的 SentenceTransformer 子集。"""
+
+    def __init__(self, model_dir: str) -> None:
+        onnx_dir = os.path.join(model_dir, "onnx")
+        self._tokenizer = Tokenizer.from_file(os.path.join(onnx_dir, "tokenizer.json"))
+        self._tokenizer.enable_truncation(max_length=512)
+        self._tokenizer.enable_padding()
+        self._session = ort.InferenceSession(
+            os.path.join(onnx_dir, "model.onnx"),
+            providers=["CPUExecutionProvider"],
+        )
+
+    @staticmethod
+    def get_sentence_embedding_dimension() -> int:
+        return 1024
+
+    def encode(self, texts, **_kwargs):
+        encoded = self._tokenizer.encode_batch(texts)
+        inputs = {
+            "input_ids": np.asarray([item.ids for item in encoded], dtype=np.int64),
+            "attention_mask": np.asarray(
+                [item.attention_mask for item in encoded], dtype=np.int64
+            ),
+        }
+        return self._session.run(["sentence_embedding"], inputs)[0]
 
 
 class EmbeddingRequest(BaseModel):
@@ -61,9 +97,13 @@ class EmbeddingResponse(BaseModel):
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     global _model
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    logger.info("loading model from %s on device=%s", MODEL_DIR, device)
-    _model = SentenceTransformer(MODEL_DIR, device=device)
+    if SentenceTransformer is not None and torch is not None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        logger.info("loading model from %s on device=%s", MODEL_DIR, device)
+        _model = SentenceTransformer(MODEL_DIR, device=device)
+    else:
+        logger.info("torch unavailable; loading ONNX model from %s on CPU", MODEL_DIR)
+        _model = OnnxSentenceTransformer(MODEL_DIR)
     logger.info("model loaded. dim=%s", _model.get_sentence_embedding_dimension())
     yield
     _model = None
