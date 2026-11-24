@@ -324,17 +324,20 @@ bash scripts/test.sh
 
 **目标**：跑通「上传 → 索引 → 问答命中」与「删除 → 不再命中」，并做对增量更新。
 
+> 2026-11-24 状态：实现与真实 REST 链路已完成；真实企业微信的上传后问答/删除后拒答
+> 留在 CURRENT_PLAN M4 最终验收。
+
 **任务清单**
-- [ ] `app/services/indexing.py`：单 worker 异步任务队列（`asyncio.Queue` + 后台 task），避免并发 embedding 打爆限流
-- [ ] `app/services/document_service.py`：
+- [x] `app/services/indexing.py`：单 worker 异步任务队列（`asyncio.Queue` + 后台 task），避免并发 embedding 打爆限流
+- [x] `app/services/document_service.py`：
   - `upload()`：校验格式/大小 → SHA-256 → **三分支判定**（created / skipped / replaced，TDD §2.2 流 B）
   - `delete()`：删向量 + 删记录 + 删原文件
   - `reindex()`：手动重建
   - 状态机流转 `pending → indexed / failed`，失败写 `error_message`
-- [ ] `app/api/documents.py`：`POST /api/documents`（multipart 多文件，返回 202）、`GET` 列表（分页）、`GET /{doc_id}`、`GET /{doc_id}/content`（前端高亮用）、`DELETE /{doc_id}`、`POST /{doc_id}/reindex`
-- [ ] 原文件落盘到 `storage/uploads/{doc_id}`（供原文预览）
-- [ ] 路径穿越防御：`secure_filename` + `resolve().is_relative_to()` 校验
-- [ ] 测试：`test_document_service.py` 5 条（**同内容重传 skipped**、**改内容 replaced 且 version+1 且旧向量清空**、删除后检索不命中、坏文件 failed 不影响其他文档）
+- [x] `app/api/documents.py`：`POST /api/documents`（multipart 多文件，返回 202）、`GET` 列表（分页）、`GET /{doc_id}`、`GET /{doc_id}/content`（前端高亮用）、`DELETE /{doc_id}`、`POST /{doc_id}/reindex`
+- [x] 原文件按 `storage/uploads/{doc-hash}/{content-hash}/{filename}` 版本化落盘（替换失败时旧原文仍可用）
+- [x] 路径穿越防御：basename 归一化 + Windows 非法/保留文件名处理 + `resolve().is_relative_to()` 校验
+- [x] 测试：`test_document_service.py` + `test_document_api.py` 覆盖异步状态、去重、替换回滚、串行 worker、删除、手动重建和坏格式；全套 **304 passed**
 
 **验收动作**
 ```bash
@@ -347,6 +350,9 @@ curl -F "files=@data/knowledge/员工手册.md" http://localhost:8000/api/docume
 curl -F "files=@data/knowledge/员工手册.md" http://localhost:8000/api/documents   # action: replaced, version: 2 ✅
 bash scripts/test.sh
 ```
+
+**真实验收记录（2026-11-24，临时隔离存储）**：`常见FAQ.md` 上传立即返回
+`pending`，随后变为 `indexed`（27 chunks）；DELETE 返回 `deleted_chunks=27`，列表 total=0。
 
 **commit 计划（4 个）**
 1. `feat(services): 实现异步索引任务队列`

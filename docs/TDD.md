@@ -1057,7 +1057,7 @@ class UsageView(BaseModel):
 
 class ChatFrame(BaseModel):
     """SSE 帧的联合类型；前端按 type 分支处理（discriminated union）。"""
-    type: Literal["delta", "tool_call", "citations", "usage", "done", "error"]
+    type: Literal["reasoning", "delta", "tool_call", "citations", "usage", "done", "error"]
     content: str | None = None
     tool_call: ToolCallView | None = None
     citations: list[CitationView] | None = None
@@ -1065,23 +1065,26 @@ class ChatFrame(BaseModel):
     error: ErrorView | None = None
 
 # ---- document.py ----
+DocumentStatus = Literal["pending", "indexed", "failed"]
+
 class DocumentMeta(BaseModel):
     doc_id: str
     filename: str
     ext: str
     byte_size: int
-    status: Literal["pending", "indexed", "failed"]
+    status: DocumentStatus
     chunk_count: int
     version: int
     error_message: str | None = None
     created_at: datetime
+    updated_at: datetime
     indexed_at: datetime | None = None
 
 class UploadResultItem(BaseModel):
     filename: str
     doc_id: str | None = None
     action: Literal["created", "skipped", "replaced", "rejected"]
-    status: DocumentMeta["status"] | None = None
+    status: DocumentStatus | None = None
     reason: str | None = None          # rejected 时说明原因（格式/大小）
 
 # ---- log.py ----
