@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,14 +26,22 @@ class _Pipeline:
         self.indexed: list[Path] = []
         self.deleted: list[str] = []
         self.fail = False
+        self.active = 0
+        self.max_active = 0
 
     async def index_file(self, path: str) -> _IndexResult:
         file_path = Path(path)
         self.indexed.append(file_path)
-        if self.fail:
-            raise RuntimeError("embedding down")
-        document = parse_file(file_path)
-        return _IndexResult(document.doc_id, 3)
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        try:
+            await asyncio.sleep(0)
+            if self.fail:
+                raise RuntimeError("embedding down")
+            document = parse_file(file_path)
+            return _IndexResult(document.doc_id, 3)
+        finally:
+            self.active -= 1
 
     async def delete_document(self, doc_id: str) -> int:
         self.deleted.append(doc_id)
@@ -152,3 +161,17 @@ async def test_reindex_keeps_version_and_restores_state_on_failure(tmp_path: Pat
     await service.reindex("制度.md")
     await service.drain()
     assert service.get_document("制度.md") == before_failure
+
+
+@pytest.mark.asyncio
+async def test_multiple_documents_are_indexed_by_single_worker(tmp_path: Path) -> None:
+    pipeline = _Pipeline()
+    service = DocumentService(settings=_settings(tmp_path), pipeline=pipeline)  # type: ignore[arg-type]
+    await service.submit("甲.md", "甲文档内容".encode())
+    await service.submit("乙.md", "乙文档内容".encode())
+    await service.drain()
+
+    assert pipeline.max_active == 1
+    assert [path.name for path in pipeline.indexed] == ["甲.md", "乙.md"]
+    assert service.get_document("甲.md").status == "indexed"
+    assert service.get_document("乙.md").status == "indexed"

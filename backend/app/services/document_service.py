@@ -17,6 +17,7 @@ from app.db.entities import DocumentRecord
 from app.db.repositories import DocumentRepo
 from app.rag.loaders import detect_ext, normalize_doc_id, parse_file
 from app.rag.pipeline import RAGPipeline
+from app.services.indexing import IndexTaskQueue
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +52,7 @@ class DocumentService:
         init_db(settings.sqlite_path)
         self._repo = DocumentRepo(settings.sqlite_path)
         self._mutation_lock = asyncio.Lock()
-        self._tasks: set[asyncio.Task[None]] = set()
+        self._index_queue = IndexTaskQueue()
 
     async def submit(self, filename: str, data: bytes) -> UploadDecision:
         """接收单文件并立即返回；耗时的解析、向量化在后台任务执行。"""
@@ -104,12 +105,7 @@ class DocumentService:
                 updated_at=timestamp,
             )
             self._repo.upsert(record)
-            task = asyncio.create_task(
-                self._index_pending(record, previous),
-                name=f"index-document:{doc_id}:v{record.version}",
-            )
-            self._tasks.add(task)
-            task.add_done_callback(self._tasks.discard)
+            self._index_queue.submit(lambda: self._index_pending(record, previous))
 
         action = "replaced" if previous else "created"
         return UploadDecision(safe_name, doc_id, action, "pending")
@@ -175,19 +171,12 @@ class DocumentService:
                 indexed_at=None,
             )
             self._repo.upsert(pending)
-            task = asyncio.create_task(
-                self._index_pending(pending, previous),
-                name=f"reindex-document:{normalized}:v{pending.version}",
-            )
-            self._tasks.add(task)
-            task.add_done_callback(self._tasks.discard)
+            self._index_queue.submit(lambda: self._index_pending(pending, previous))
             return pending
 
     async def drain(self) -> None:
         """等待当前后台索引结束；测试与优雅停机共用。"""
-        tasks = tuple(self._tasks)
-        if tasks:
-            await asyncio.gather(*tasks)
+        await self._index_queue.drain()
 
     async def _index_pending(
         self,
