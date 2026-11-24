@@ -224,7 +224,8 @@ bash scripts/test.sh                                   # 全绿
   - `.docx` 复用 loader 已引入的 `python-docx`；`.pdf` 用 `fpdf2`（`uv add --dev fpdf2`，仅 dev 依赖）+ 一个中文字体文件
   - **语料正文以 `.md` 为唯一真源**，`.pdf/.docx` 由脚本从对应 `.md` 转换生成 → 改内容只改一处，避免三份不同步
   - 生成的 `.pdf/.docx` **入库**（体积小、是验收所需语料）；字体文件不入库，脚本里注明获取方式
-- [ ] `scripts/seed_data.sh`：把 `data/knowledge/*` 导入（M4 完成后才真正索引，此步先落盘 + 建 documents 记录）
+- [x] `scripts/seed_data.sh`：把 `data/knowledge/*` 解析、分块、向量化并写入 Chroma
+- [ ] `scripts/seed_data.sh`：同步创建/更新 documents 状态记录（随文档管理 API 完成）
 - [ ] 测试：`test_repositories.py` ≥5 条（CRUD、分页、按 session 取历史、级联删除）
 
 **验收动作**
@@ -248,37 +249,44 @@ bash scripts/test.sh        # 全绿
 
 **目标**：文档能进向量库，问题能召回相关片段，且**引用能定位到原文精确位置**。
 
+> 编号说明：本节沿用旧 DEV_PLAN 的 M3；在权威 `CURRENT_PLAN.md` 中对应 **M4**。
+> 2026-11-24 状态：RAG 核心闭环已完成；文档上传/列表/删除与数据库状态管理仍待后续完成。
+
 **任务清单**
-- [ ] `app/rag/loaders.py`：4 种格式解析器 + `RawDocument`（含 `content_hash`）+ 编码回退（UTF-8 → GBK → replace）
-- [ ] `app/rag/chunking.py`：**结构化分块器**（TDD §4.4.2）
+- [x] `app/rag/loaders.py`：4 种格式解析器 + `RawDocument`（含 `content_hash`）+ 编码回退（UTF-8 → GBK → replace）
+- [x] `app/rag/chunking.py`：**结构化分块器**（TDD §4.4.2）
   - 标题栈 → `heading_path`
   - 超长节二次切分（段落 → 句子 → 硬切）
   - `chunk_overlap_chars` 重叠
   - **`char_start` / `char_end` 精确偏移**
   - 过短块合并
-- [ ] `app/rag/vector_store.py`：`VectorStore` Protocol + `ChromaStore`（含 `delete_by_doc`）
+- [x] `app/rag/vector_store.py`：`VectorStore` Protocol + `ChromaStore`（含 `delete_by_doc`）
   - 🔴 建 collection 时**显式指定 `metadata={"hnsw:space": "cosine"}`**（bge-m3 输出已 L2 归一化，实测 `L2norm=1`，cosine 下 `distance = 1 - cos`）
   - collection 元数据写入 `embed_model` + `embed_dim`，加载时校验；不一致则报错提示需 `reindex`（R8）
-- [ ] `app/rag/embedder.py`：批量向量化（分批 16，实测 GPU 下 4 条 278 ms）、失败重试 1 次
+- [x] `app/rag/embedder.py`：批量向量化（分批 16，失败重试 1 次，维度由配置读取）
   - 🔴 走**本地 BGE-M3 服务** `http://127.0.0.1:8001/v1/embeddings`（OpenAI 兼容 → 复用 `AsyncOpenAI` **只换 `base_url`**，`api_key` 填占位串 `not-needed`）
   - 🔴 调用前打 `GET /health`：`loaded:false` 表示**模型仍在加载**，应等待重试而非判为故障；端口不可达时打印**可操作**提示（含启动命令）而非静默失败（R17）
   - 🔴 首次请求含 CUDA 预热（实测 **2.1 s**，之后毫秒级）→ 启动自检时**预热一次**，避免第一个提问的用户莫名卡顿
   - ⚠️ 该服务返回的 `usage.prompt_tokens` 实为**字符数**而非真 token（`len(str(t))`）→ embedding 成本一律记 **0 元**，**不得混入** LLM 成本统计，否则 FR-5-10 失真
-- [ ] `app/rag/retriever.py`：过采样 top_k×2 → 同源去重（单文档 ≤3 块）→ **`score = 1 - cosine_distance`** → 阈值过滤（默认 **0.55**）
+- [x] `app/rag/retriever.py`：过采样 top_k×2 → 同源去重（单文档 ≤3 块）→ **`score = 1 - cosine_distance`** → 阈值过滤（定稿 **0.63**）
   - 🔴 **弃用原设计的 `1/(1+distance)`**：该变换不可解释、无法与实测余弦基线对齐，调阈值只能靠猜（§4.4.4）
   - 🔴 除绝对阈值外，增加**相对间隔判据** `top1 - mean(top_k) < margin` → 亦判为「检索不可靠」，降低单一阈值的脆弱性（R16）
-- [ ] 🔴 `backend/dev_tools/calibrate_threshold.py`：**阈值标定脚本**。用真实语料构造「相关对 / 不相关对」两组样本，输出分数分布直方图与建议分界点，据此定稿 `retrieval_min_score`
+- [x] 🔴 `backend/dev_tools/calibrate_threshold.py`：**阈值标定脚本**。用真实语料构造「相关对 / 不相关对」两组样本，输出分数分布与建议分界点，据此定稿 `retrieval_min_score`
   - 背景：实测**完全不相关的中文文本之间余弦基线就有 ~0.48**，原设计的 `0.35` **低于噪声地板 = 完全不过滤**，拒答 L1 层形同虚设（R16）
-  - ⚠️ 本次 0.48 / 0.71 测自**短样本**；真实语料分块更长、同属公司制度领域，**噪声地板预计更高（可能 0.6+）**，故 0.55 仅为起点，**以本脚本的标定结果为准**
-- [ ] `app/rag/citations.py`：`[n]` 解析 → `Citation`（含偏移）+ 越界编号忽略
-- [ ] **测试重点**（≥20 条）：
+  - ✅ 4 份真实语料最终标定：相关最低 **0.6888**、不相关最高 **0.5741**、建议中点 **0.6314**；配置定稿 `min_score=0.63`、`min_spread=0.01`
+- [x] `app/rag/citations.py`：`[n]` 解析 → `Citation`（含偏移）+ 越界编号忽略
+- [x] `app/rag/pipeline.py`：`index_file` / `retrieve` 编排；新版本完整写入后切换 active manifest，失败保留旧版本
+- [x] **测试重点**（≥20 条）：
   - `test_chunking.py` 8 条，**核心断言：`raw.content[c.char_start:c.char_end]` 归一化后等于 `c.text`**
-  - `test_loaders.py` 5 条、`test_citations.py` 4 条、检索用 MockLLM 的确定性伪向量 3 条
+  - `test_loaders.py`、`test_chunking.py`、`test_embedder.py`、`test_vector_store.py`、
+    `test_retriever.py`、`test_citations.py`、`test_pipeline.py` 均已覆盖；全套 **291 passed**
 
 **验收动作**
 ```bash
 # ── 前置：另开一个终端，启动本地 embedding 服务（M3 起为硬依赖，见 R17）──
-python backend/dev_tools/embedding_service.py     # 或直接跑 E:\Models\bge-m3-service\start_service.ps1
+cd backend
+$env:BGE_MODEL_DIR='D:\Models\bge-m3'
+uv run python dev_tools/embedding_service.py
 curl -s http://127.0.0.1:8001/health              # 期望 {"status":"ok","model":"bge-m3","loaded":true}
                                                   # loaded:false = 模型仍在加载，等几秒重试，不算故障
 
@@ -288,7 +296,7 @@ uv run python -m app.rag.chunking data/knowledge/员工手册.md   # CLI 调试�
 uv run python -c "
 import asyncio; from app.rag.pipeline import index_file, retrieve
 asyncio.run(index_file('data/knowledge/员工手册.md'))
-print(asyncio.run(retrieve('员工每年有几天年假')))"              # 应命中 3.1 年假 章节，且 score 显著高于 0.55（实测正确命中≈0.71 / 不相关≈0.48）
+print(asyncio.run(retrieve('员工每年有几天年假')))"              # 应命中员工手册；实测 top1=0.6988，偏移 968:1383 可回溯
 uv run python dev_tools/calibrate_threshold.py                 # 打印相关/不相关两组分数分布，据此定稿 retrieval_min_score
 bash scripts/test.sh
 ```
@@ -302,7 +310,7 @@ bash scripts/test.sh
 6. `test(rag): 补充分块与检索单元测试，校验偏移可回溯`
 
 **AI_USAGE 素材（重点记录，这是最能体现驾驭力的里程碑）**
-- 🔴 **（已实测发生，最有说服力的一条）AI 在设计阶段把 `retrieval_min_score` 拍成 `0.35`，数值看起来完全合理**；直到用真实 bge-m3 服务测出「**不相关中文文本的余弦基线就有 0.48**」，才发现该阈值**低于噪声地板、等于没过滤**，拒答 L1 层形同虚设、幻觉防线直接失守 → 改为 `0.55` 并新增标定脚本 + 相对间隔判据。**教训：凡是有具体数值的超参，AI 给的都是「看起来合理」的猜测，必须用真实数据标定后才能写死。**
+- 🔴 **（已实测发生，最有说服力的一条）AI 在设计阶段把 `retrieval_min_score` 拍成 `0.35`，数值看起来完全合理**；短样本先把起点修正为 `0.55`，再用 4 份真实语料标定出相关最低 **0.6888**、不相关最高 **0.5741**、建议中点 **0.6314**，最终定稿 `0.63`。同时，`min_spread=0.05` 会误杀多个相邻正确块得分接近的 Q1/Q3，实测后降为 `0.01`。**教训：凡是有具体数值的超参，AI 给的都是「看起来合理」的猜测，必须用真实数据标定后才能写死。**
 - 🔴 **（已实测发生）AI 默认假设「OpenAI 兼容端点必然同时提供 chat 与 embedding」**，据此把两者绑在同一个 client 上；实测该端点 `/models` 返回的 23 个模型里**没有任何 embedding 模型**（`/embeddings` 三个模型名全 404），且这把 key **不能跨端点复用**（打标准 DashScope 返回 401）→ 架构改为 chat / embed **双 `base_url`**（ADR-15），embed 落到本机 BGE-M3 服务。**教训：供应商能力必须用 `/models` + 真实请求验证，不能靠「兼容 OpenAI 协议」这个名字去推断。**
 - 🔴 **（已实测发生）AI 不知道 `qwen3.8-max` 是推理模型**，按普通 chat 模型设计 SSE 解析；实测发现流式下 `delta.reasoning_content` 的 chunk **先于** `delta.content` 到达，若按常规写法无脑拼接，**企业微信里会先吐出一大段英文思考过程**（R14）。同时实测流式下 `usage` **恒为 `null`**，不加 `stream_options={"include_usage": true}` 则成本字段**静默落 0**（R15）。**教训：模型的「隐性行为」（是否推理、流式字段顺序、usage 是否补发）文档里常常不写，只能实测。** 🔁 **平台切换后此坑加重**：IM 改用 `reply_stream` 原生流式后是边生成边推送，思考过程会**实时刷在用户脸上**，不再有「先聚合再过滤」的补救机会。
 - AI 初版分块器**丢失字符偏移** → 我发现前端无法高亮 → 改为 `finditer` 记录 span（TDD §4.4.2 已预埋此案例）
@@ -346,7 +354,7 @@ bash scripts/test.sh
 3. `feat(api): 添加文档上传、列表、删除与原文预览接口`
 4. `test(documents): 覆盖同名替换、内容去重与删除生效场景`
 
-**AI_USAGE 素材**：增量更新的三分支判定逻辑（AI 初版常只做「插入」，忽略同名替换要先删旧向量 → 导致召回重复内容）。
+**AI_USAGE 素材**：增量更新的三分支判定逻辑（AI 初版常只做「插入」，会导致召回重复内容；另一种危险初版是先删旧向量，若新版本索引失败则知识库瞬间不可用）。正确顺序是新版本完整写入 → 原子切换 active manifest → 最后清理旧版本。
 
 ---
 

@@ -33,7 +33,7 @@
 | IM SDK | **wecom-aibot-sdk-python** | 最新（PyPI） | 企业微信**智能机器人 WebSocket 长连接** SDK（**MIT**），**无需公网 IP**；内置指数退避重连 + ACK 保序 + AES-256-CBC 文件加解密（§1.5） | 自建应用回调（要公网+备案）、dingtalk-stream（平台已换，移出范围） |
 | 测试 | pytest + pytest-asyncio + httpx | — | FastAPI 官方测试方案；`httpx.ASGITransport` 无需起真实端口 | unittest（异步支持差） |
 | 容器 | Docker + compose | 29.8 | 满足「一条命令启动」 | — |
-| Shell | Bash（Git Bash） | — | **题目要求 `scripts/*.sh`**；本机 `E:\Apps\Git\bin\bash.exe` 可用 | PowerShell（不符合题目） |
+| Shell | Bash（Git Bash / CI） | — | **题目要求 `scripts/*.sh`**；当前临时电脑未找到可用 Git Bash，最终交付前须在 Git Bash 或 CI 补跑 | PowerShell（不符合题目） |
 
 ### 1.2 关键选型说明
 
@@ -132,13 +132,13 @@
 → 正确片段以 **0.18 的显著优势**排第一，**检索有效性成立**。
 
 **🔴 但由此暴露一个必须修正的设计缺陷**：**完全不相关**的中文文本之间余弦仍有 **0.48**（BGE 类模型语义空间各向异性 / 锥形分布的固有特性）。而原设计的 `retrieval_min_score = 0.35` **低于这个噪声地板，等于完全不过滤**——拒答 L1 层形同虚设，任何提问都会硬凑出「参考资料」喂给 LLM，直接放大幻觉风险（FR-2-08/09 失守）。
-→ 已把默认阈值改为 **0.55**，并新增 **R16** 与 M3 的**阈值标定任务**（详见 §4.4.4）。**这是本次实测最有价值的产出**：一个不实测就绝不可能发现、且发现前看起来完全合理的参数错误。
+→ 短样本阶段先把默认阈值从 0.35 修正为 **0.55**；2026-11-24 再用 4 份完整语料标定为 **0.63**，并把相对间隔定为 **0.01**（详见 §4.4.4 / R16）。**这是本次实测最有价值的产出**：一个不实测就绝不可能发现、且发现前看起来完全合理的参数错误。
 
 **被否决的备选**：
 
 | 方案 | 否决理由 |
 |---|---|
-| 本地 ONNX（`onnxruntime` + bge） | `E:\Models\bge-m3\onnx\` 里 `model.onnx` 仅 0.7 MB，旁边躺着 `model.onnx_data.incomplete`（168 MB）——**该导出是残缺的、不可用**；重新导出成本高且无必要 |
+| 仅使用残缺 ONNX 导出 | 旧机器曾只有 `model.onnx_data.incomplete`，当时不可用；本机 `D:\Models\bge-m3` 已有完整 ONNX 外部数据，服务现支持在 torch/sentence-transformers 不可用时自动回退 ONNX |
 | 项目内直接装 `sentence-transformers` | 会把 **torch 2 GB+** 拖进 backend 的 `.venv`，与「轻量、安装快」目标冲突。**用独立服务隔离依赖才是更优架构** |
 | `bge-base-zh-v1.5`（`C:\Users\26943\models\`，768 维） | 效果弱于 M3；保留为**降级备选**，但切换需重建索引 |
 | ChromaDB 默认 `all-MiniLM-L6-v2` | 英文模型，中文检索质量差，直接拖累 18 分 |
@@ -250,10 +250,12 @@ POST /api/documents (multipart)
   → 校验格式/大小 → 计算 SHA-256 → 按「归一化文件名」查已有记录
       ├─ 不存在         → INSERT(status=pending) → 投递后台索引任务
       ├─ 存在且 hash 相同 → 直接返回，跳过索引（FR-1-07）
-      └─ 存在但 hash 不同 → 删旧向量 → UPDATE(status=pending, version+1) → 重建索引
-  → 后台任务：解析 → 结构化分块 → 批量 embedding → 写入 Chroma
-      ├─ 成功 → UPDATE(status=indexed, chunk_count=n, indexed_at=now)
-      └─ 失败 → UPDATE(status=failed, error_message=...)
+      └─ 存在但 hash 不同 → 保留旧 active 版本 → INSERT/UPDATE 新版本为 pending
+  → 后台任务：解析 → 结构化分块 → 批量 embedding → 以 content_hash 版本 ID 写入 Chroma
+      ├─ 成功 → 原子切换 active manifest → UPDATE(status=indexed, version+1, ...)
+      │          → 最后清理旧版本向量
+      └─ 失败 → 清理新版本残留 → UPDATE(status=failed, error_message=...)
+                 → 旧 active 版本继续可检索
   → 接口立即返回 202，不阻塞（FR-1-08）
 ```
 
@@ -450,7 +452,8 @@ class Settings(BaseSettings):
     chunk_max_chars: int = 600
     chunk_overlap_chars: int = 80
     retrieval_top_k: int = 8
-    retrieval_min_score: float = 0.55               # 拒答阈值（FR-2-09）🔴 实测标定：不相关中文噪声地板≈0.48、正确命中≈0.71；原 0.35 低于噪声地板等于不过滤（§1.4 / R16）
+    retrieval_min_score: float = 0.63               # 完整语料标定：正样本最低 0.6888、噪声最高 0.5741，建议中点 0.6314
+    retrieval_min_spread: float = 0.01              # Q3 多个正确相邻块得分接近，实测 spread=0.0105
 
     # ── Agent ──────────────────────────────────────────────
     agent_max_tool_rounds: int = 5                  # FR-3-06
@@ -612,9 +615,11 @@ class VectorStore(Protocol):
 ```
 
 - **`ChromaStore`**：`PersistentClient(path=settings.chroma_dir)`，单 collection `xiaosu_kb`，**显式指定 `metadata={"hnsw:space": "cosine"}`**——bge-m3 输出已 L2 归一化（实测 L2norm=1），cosine 空间下 `distance = 1 - cos`，score 可直接解释为余弦相似度，便于与实测基线对齐调阈值。
-- **元数据写入**：`doc_id / filename / index / heading_path(join " > ") / char_start / char_end / page`——检索结果无需回表即可构造完整引用。
+- **collection 元数据**：写入并校验 `embed_model` + `embed_dim`；不一致时拒绝复用并提示重建索引（R8）。
+- **chunk 元数据写入**：`doc_id / content_hash / chunk_id / filename / index / heading_path(join " > ") / char_start / char_end / page`——检索结果无需回表即可构造完整引用。
 - **批量 embedding**：按 `embed_batch_size`(16) 分批，单批失败重试 1 次；全批失败则文档置 `failed`。
-- **`delete_by_doc`** 用 Chroma 的 `where={"doc_id": ...}` 过滤删除 → 保证「删除文档后不再参与问答」（FR-1-05）与「同名替换不重复」（FR-1-06）。
+- **版本切换**：物理向量 ID 包含 `content_hash`；`active_versions.json` 只暴露当前成功版本。新版本全部写入成功后才原子替换 manifest，再清理旧版本；任一步失败都不影响旧版本检索。
+- **`delete_by_doc`** 用 Chroma 的 `where={"doc_id": ...}` 过滤删除 → 保证「删除文档后不再参与问答」（FR-1-05）。
 
 #### 4.4.4 检索与拒答 `retriever.py` / `agent/refusal.py`
 
@@ -633,8 +638,9 @@ async def retrieve(query: str, *, top_k: int, min_score: float) -> RetrievalResu
 1. query 向量化 → Chroma `query(top_k * 2)`（过采样）。
 2. **同源去重**：同一 `doc_id` 最多保留 3 块，避免单篇文档霸榜导致其他文档召不回。
 3. 距离→相似度：cosine 空间下 **`score = 1 - distance`，score 即余弦相似度**。🔴 **弃用原设计的 `1/(1+distance)`**——该变换把分数压进 (0,1] 且不可解释，无法与实测的余弦基线（§1.4）对齐，调阈值只能靠猜。
-4. **阈值过滤**：`score < retrieval_min_score`(0.55) 全部丢弃。🔴 该值由实测标定：不相关中文文本余弦≈**0.48**（噪声地板）、正确命中≈**0.71**。**原设计的 0.35 低于噪声地板，等于不过滤，已废弃。**
-5. 取前 `top_k`(8) 返回。
+4. **绝对阈值过滤**：`score < retrieval_min_score`(0.63) 全部丢弃。4 份真实语料标定结果为：相关最低 **0.6888**、不相关最高 **0.5741**、建议中点 **0.6314**。
+5. **相对间隔过滤**：`top1 - mean(top_k) < retrieval_min_spread`(0.01) 时判为不可靠；0.05 会误杀 Q1/Q3 多个相邻正确块分数接近的场景，已由实测下调。
+6. 取前 `top_k`(8) 返回。
 
 **拒答双保险（FR-2-08/09）**：
 
@@ -647,11 +653,11 @@ async def retrieve(query: str, *, top_k: int, min_score: float) -> RetrievalResu
 > L1 省下无谓的 LLM 调用（成本 + 延迟），L2 处理「检索到了但不相关」的灰色地带，L3 兜住模型不听话的情况。三层都有独立单测。
 > 🔴 **阈值必须标定，不能拍脑袋**（R16）。实测发现 BGE 类模型的中文语义空间存在各向异性：**任意两段不相关中文的余弦基线就有 ~0.48**，因此绝对阈值的可用窗口其实很窄（约 0.50~0.70），随手写个 0.3/0.35 等于没过滤。四条对策：
 > ① 阈值做成环境变量，便于面试现场演示调优效果；
-> ② **M3 增加标定脚本** `backend/dev_tools/calibrate_threshold.py`：用真实语料构造「相关对 / 不相关对」两组样本，输出分数分布直方图与建议分界点，避免凭感觉定值；
+> ② **M3 增加并已执行标定脚本** `backend/dev_tools/calibrate_threshold.py`：用真实语料构造「相关对 / 不相关对」两组样本，输出分数分布与建议分界点，避免凭感觉定值；
 > ③ 除绝对阈值外辅以**相对间隔判据**——`top1 - mean(top_k) < margin` 时也判为「检索不可靠」，降低单一绝对阈值的脆弱性；
 > ④ Evals（M10）对阈值做回归，防止调好一处坏一处。
 >
-> 注：本次 0.48 / 0.71 是在**短样本**上测得的。真实语料的分块更长、且同属公司制度领域，语义更相近，**噪声地板预计会更高**（可能到 0.6+）。所以 0.55 只是起点，**必须以 ② 的标定结果为准**。
+> 注：0.48 / 0.71 是早期**短样本**结果，0.55 仅是起点。2026-11-24 已按 4 份真实语料完成标定并定稿为 `min_score=0.63`、`min_spread=0.01`；后续语料变化仍须重跑脚本回归。
 
 **敏感信息拒答（FR-2-10）**：`refusal.py` 维护一个敏感意图正则表（家庭住址、身份证号、银行卡、薪资明细、病历等），命中则直接拒答，不进入检索。这条针对验收题 7.4-8「CEO 的家庭住址」。
 
@@ -1398,8 +1404,8 @@ services:
 | R1 | **拿不到企业微信智能机器人凭证**（`bot_id` / `secret`，需企业管理员权限） | 中 | 🔴 致命（淘汰项） | ① 用个人手机号免费注册企业微信「企业/团队」→ 自己即管理员 → 管理后台创建**智能机器人**取 `bot_id` + `secret`；② 🔴 **首要未知项：需先确认「智能机器人」功能对你的企业是否开放**（可能要求企业认证）——Day 1 第一件事就是进后台点一遍，别等到 M9；③ 早期并行推进，不等代码写完；④ 保留 Web 聊天 + MockAdapter 降级演示 |
 | R2 | 检索阈值调不好：要么啥都答，要么啥都拒 | 高 | 🟠 18 分受影响 | ① 阈值做成环境变量；② 写 Evals 脚本（20+ case）批量回归；③ 同源去重 + 过采样已降低噪声；④ 🔴 **实测已证明可用窗口很窄**（不相关基线 0.48 / 正确命中 0.71），必须用 `calibrate_threshold.py` 按真实语料标定，并辅以相对间隔判据（见 R16） |
 | R3 | 模型不听话：该调工具时直接编答案 | 中 | 🟠 | ① System Prompt 硬约束「必须先调工具」；② L3 后校验（无引用即降级）；③ 工具 description 措辞迭代；④ 选工具调用能力强的模型（qwen-plus/glm-4 级别以上） |
-| R4 | 相对时间算错（「上周」区间错） | 高 | 🟠 验收题 7.2-5/7.3-7 | ① 当前时间注入 system prompt；② `get_current_time` 描述强制「先确定基准」；③ 单测覆盖日期推算 |
-| R5 | Windows 下 `scripts/*.sh` 跑不起来 | 中 | 🟠 工程化失分 | ① 全程用 Git Bash（本机已确认 `E:\Apps\Git\bin\bash.exe`）；② 脚本用 `#!/usr/bin/env bash` + `set -euo pipefail`，避免 bashism；③ README 写明「Windows 请在 Git Bash 中执行」；④ 提供 Docker 备选路径 |
+| R4 | 相对时间算错（「上周」区间错） | 高 | 🟠 验收题 7.2-5/7.3-7 | ① 时间类问题必须先调用 `get_current_time`，禁止把当前时间注入 Prompt；② 工具描述强制「先确定基准」；③ 单测覆盖日期推算 |
+| R5 | Windows 下 `scripts/*.sh` 跑不起来 | 中 | 🟠 工程化失分 | ① 脚本用 `#!/usr/bin/env bash` + `set -euo pipefail`；② README 写明「Windows 请在 Git Bash 中执行」；③ 当前临时电脑无可用 Git Bash，最终交付前在 Git Bash/CI 补跑；④ 提供 Docker 备选路径 |
 | R6 | 单文件超 500 行 | 中 | 🟠 底线失分 | ① 设计阶段就按功能细拆（见 §3）；② `check_limits.sh` 纳入 `test.sh` 门禁；③ orchestrator 等长文件预留拆分点 |
 | R7 | Chroma 版本 API 变动 | 低 | 🟡 | `VectorStore` Protocol 隔离，替换成本局限于 1 个文件 |
 | R8 | Embedding 与 Chat 供应商不一致导致跨供应商不兼容 | 中 | 🟡 | **本项目已是刻意分离**（chat 走云端 / embed 走本地，见 ADR-15），不存在「同一把 key 必须同时提供 chat 与 embedding」的隐含假设。向量库记录 `embed_model` + `embed_dim`，切换模型时提示需重建索引；提供 `reindex` 接口。降级备选：本机 `bge-base-zh-v1.5`（768 维） |
@@ -1407,11 +1413,11 @@ services:
 | R10 | ~~**钉钉普通消息不可编辑**，占位后无法「原地更新」为正式答案~~ | ✅ **已消除**（随平台切换） | — | 企业微信智能机器人的 `reply_stream` **原生支持流式回写**，「原地更新」不再是问题（§4.6.3 方案 A）；原「占位 + 追加两条消息」降级为**兜底路径**，打字机效果从 P2 提前到 M9 主线。⚠️ 残留待验证项：`reply_stream` 是否为真·原地刷新，须由 M9 spike 实测确认（§1.5 证据等级）；若实为追加语义则回落方案 B |
 | R11 | 截图、录屏、语料等**资源文件触发 `check_limits.sh` 误报超限** | 中 | 🟠 底线自查假阳性 | 脚本统计范围限定为代码文件（§3 约定 3）；资源统一放 `docs/screenshots/`；该约定写进 README「工程规范」小节，避免评审歧义 |
 | R12 | `scripts/` 已达 **8 文件上限**，后续想加脚本即超限 | 中 | 🟠 底线失分 | 新增脚本前先尝试合并（如 `acceptance_check.sh` 并入 `test.sh --acceptance`）；确需新增则建 `scripts/dev/` 子目录 |
-| **R13** | 🔴 token-plan 端点不提供任何 embedding 模型（`/models` 23 个全量中无一），且该 key 打标准 DashScope 返回 401 | ~~高~~ → ✅ **已消除** | ~~阻塞 M3~~ 已解除 | **改用本机已有的 BGE-M3 独立服务**（`http://127.0.0.1:8001/v1/embeddings`，OpenAI 兼容）。实测：`dim=1024`、`L2norm=1`、批量 4 条 278ms(GPU)、语义排序正确（命中 0.71 vs 不相关 0.48）。backend **零新增重依赖**（复用 `openai.AsyncOpenAI` 只换 `base_url`），torch 隔离在服务自己的 venv。详见 §1.4 |
+| **R13** | 🔴 token-plan 端点不提供任何 embedding 模型（`/models` 23 个全量中无一），且该 key 打标准 DashScope 返回 401 | ~~高~~ → ✅ **已消除** | ~~阻塞 M3~~ 已解除 | **改用本机已有的 BGE-M3 独立服务**（`http://127.0.0.1:8001/v1/embeddings`，OpenAI 兼容）。实测：`dim=1024`、`L2norm=1`。服务优先使用 sentence-transformers；临时电脑没有 torch 时用轻量 `onnxruntime` + `tokenizers` 读取现有完整 ONNX 权重，无需下载模型。详见 §1.4 |
 | **R14** | 🔴 **实测确认：`qwen3.8-max` 是推理模型，流式下 `reasoning_content` chunk 先于 `content` 到达** | 中 → 🔴 **切换企业微信后升级为高** | SSE 解析器分离两类 delta，仅 `content` 进答案；`reasoning_content` 映射为 `{type:"reasoning"}` 帧供 Web 折叠展示、IM 忽略。**否则企业微信会输出英文思考过程**。🔴 **升级原因**：IM 侧改用 `reply_stream` 原生流式后是**边生成边推给用户**，思考过程会实时刷在屏幕上，不再像「先聚合再发」那样有事后过滤的机会（§4.6.3 方案 A 的新增风险）。M5 的 `test_reasoning_split.py` 因此成为**阻断级**测试 |
 | **R15** | 🔴 **实测确认：流式模式下 `usage` 恒为 `null`** | 中 | 流式请求默认携带 `stream_options={"include_usage": true}`；M5 增加断言测试「流式路径 `total_tokens > 0`」，防止成本字段**静默落 0** |
-| **R16** | 🔴 **实测发现：完全不相关的中文文本之间余弦基线高达 ~0.48**（BGE 语义空间各向异性），原设计 `retrieval_min_score=0.35` **低于噪声地板，拒答 L1 层形同虚设** | **高（已实测证实）** | 🟠 18 分 + FR-2-08/09 | ① 默认阈值改为 **0.55**；② M3 增加 `backend/dev_tools/calibrate_threshold.py`，用真实语料的「相关对/不相关对」输出分数分布直方图与建议分界点；③ 辅以**相对间隔判据** `top1 - mean(top_k) < margin`；④ score 改用可解释的 `1 - cosine_distance`（弃用 `1/(1+d)`）；⑤ M10 Evals 对阈值做回归。详见 §4.4.4 |
-| **R17** | 🟠 **项目依赖一个外部本地服务**（bge-m3 @ `:8001`），仓库无法自包含 2.2 GB 权重；换机器 / 现场演示若忘记启动则检索全挂 | 中 | 🟠 演示失败 | ① 服务代码副本收进 `backend/dev_tools/embedding_service.py`（注明来源），可一键起；② README「快速开始」把它列为**前置步骤**；③ backend 启动时打 `/health`，不可达则输出**可操作**报错（含启动命令）而非静默失败；④ `loaded:false`（模型加载中）按「稍后重试」处理，不判为故障；⑤ 降级备选 `bge-base-zh-v1.5` |
+| **R16** | 🔴 **实测发现：完全不相关的中文文本之间余弦基线高达 ~0.48**（BGE 语义空间各向异性），原设计 `retrieval_min_score=0.35` **低于噪声地板，拒答 L1 层形同虚设** | **高（已实测证实）** | 🟠 18 分 + FR-2-08/09 | ① 4 份真实语料标定：相关最低 0.6888、不相关最高 0.5741、建议中点 0.6314，定稿 **min_score=0.63**；② `calibrate_threshold.py` 可重复回归；③ 相对间隔实测定稿 **min_spread=0.01**；④ score 使用可解释的 `1 - cosine_distance`；⑤ M10 Evals 持续回归。详见 §4.4.4 |
+| **R17** | 🟠 **项目依赖一个外部本地服务**（bge-m3 @ `:8001`），仓库无法自包含 2.2 GB 权重；换机器 / 现场演示若忘记启动则检索全挂 | 中 | 🟠 演示失败 | ① 服务代码副本收进 `backend/dev_tools/embedding_service.py`；② 临时电脑设置 `BGE_MODEL_DIR=D:\Models\bge-m3` 后启动，复用现有权重、无需下载；③ sentence-transformers 不可用时自动回退 ONNX；④ backend `/health` 报告 embedding/vector 状态；⑤ 最终一键启动必须包含并检查该服务 |
 | **R18** | 🟠 **IM 依赖社区 SDK 而非官方 SDK**：`wecom-aibot-sdk-python` 为个人维护（MIT、已上 PyPI），腾讯未提供官方 Python SDK。存在协议漂移、停止维护、上游网关变更导致连不上的风险 | 中 | 🟠 M9（15 分 + 淘汰项） | ① **`IMAdapter` Protocol 隔离**——SDK 只在 `app/im/wecom.py` 一个文件里出现，替换成本局限于单文件（这正是 ADR-07 平级抽象的红利）；② MIT 协议 → 必要时可**vendor 源码进仓库**（`backend/vendor/`，注明来源与 commit），彻底摆脱上游可用性；③ `uv.lock` 锁版本，`--frozen` 安装，防上游悄悄改坏；④ M9 第一步先做**连通性 spike**，失败则立刻回退「自建应用回调 + 内网穿透」或 MockAdapter 降级演示；⑤ ⚠️ 已排除**内容农场仓库** `aibot-python-sdk`（README 仅 18 字节、`language:null`、无 license、topics 混入 `whatsapp-automation`）——**选依赖时必须查 star / license / README 实质内容 / 最近 push，不能只看描述**（此条已列入 AI_USAGE 素材） |
 
 
@@ -1472,7 +1478,7 @@ evals/
 |---|---|---|
 | 1 | ~~LLM 供应商最终选哪家（通义 / 智谱 / DeepSeek+第三方embedding）~~ → ✅ **已定（实测通过）** | **Chat**：阿里云 MaaS token-plan 端点 + `qwen3.8-max`（chat / tool_call / stream 三项实测全 200）。**Embedding**：本机 BGE-M3 独立服务（§1.4）。同一把 key 还可用 `deepseek-v4-pro` / `glm-5.3` 等 16 个文本模型，M11「多模型适配」零成本达成 |
 | 2 | 分块大小 600 字符 / 重叠 80 是否合适 | 先用此值，靠 Evals 调参 |
-| 3 | ~~拒答阈值 0.35~~ → ✅ **已修正为 0.55** | 🔴 实测发现不相关中文文本的余弦基线就有 **~0.48**，**0.35 低于噪声地板 = 不过滤**（R16）。0.55 只是起点，M3 需用 `calibrate_threshold.py` 按真实语料的分数分布定稿；同时 score 口径从 `1/(1+d)` 改为可解释的 `1 - cosine_distance`（§4.4.4） |
+| 3 | ~~拒答阈值 0.35 / 短样本起点 0.55~~ → ✅ **已定稿为 0.63** | 4 份真实语料标定：相关最低 **0.6888**、不相关最高 **0.5741**、建议中点 **0.6314**；相对间隔定稿 **0.01**。语料变化后重跑 `calibrate_threshold.py`，score 口径保持可解释的 `1 - cosine_distance`（§4.4.4） |
 | 4 | 后台是否需要登录 | 不做（ADR-11） |
 | 5 | 是否做飞书第二 adapter | 做，但排在所有 P0 之后（M11） |
 | 8 | ~~IM 平台选钉钉还是企业微信~~ → ✅ **已定：企业微信（完全替换）** | 用户拍板 + §1.5 复核。钉钉**移出范围**；M11 第二 adapter 仍为飞书。🔴 **待你确认的唯一一件事**：目标企业微信能否创建「智能机器人」（可能要求企业认证）——这是 R1 的首要未知项，建议 Day 1 就进管理后台点一遍，别等到 M9 |
