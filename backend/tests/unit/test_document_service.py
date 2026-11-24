@@ -112,3 +112,24 @@ async def test_rejects_unsupported_empty_and_oversized_files(tmp_path: Path) -> 
         await service.submit("空文档.md", b"")
     with pytest.raises(Exception, match="文件超过"):
         await service.submit("太大.txt", b"x" * (MAX_DOCUMENT_BYTES + 1))
+
+
+@pytest.mark.asyncio
+async def test_failed_document_can_retry_same_content_and_filename_is_sanitized(tmp_path: Path) -> None:
+    pipeline = _Pipeline()
+    pipeline.fail = True
+    service = DocumentService(settings=_settings(tmp_path), pipeline=pipeline)  # type: ignore[arg-type]
+    data = "# 制度\n正文".encode()
+
+    first = await service.submit("../薪酬:制度.md", data)
+    assert first.filename == "薪酬_制度.md"
+    await service.drain()
+    assert service.get_document("薪酬_制度.md").status == "failed"
+
+    pipeline.fail = False
+    retried = await service.submit("薪酬:制度.md", data)
+    assert retried.action == "replaced"
+    await service.drain()
+    record = service.get_document("薪酬_制度.md")
+    assert (record.status, record.version) == ("indexed", 2)
+    assert len(pipeline.indexed) == 2

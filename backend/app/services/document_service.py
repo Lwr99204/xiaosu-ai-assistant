@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import hashlib
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,6 +21,15 @@ from app.rag.pipeline import RAGPipeline
 logger = logging.getLogger(__name__)
 
 MAX_DOCUMENT_BYTES = 20 * 1024 * 1024
+_UNSAFE_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_WINDOWS_RESERVED_NAMES = {
+    "con",
+    "prn",
+    "aux",
+    "nul",
+    *(f"com{index}" for index in range(1, 10)),
+    *(f"lpt{index}" for index in range(1, 10)),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,7 +72,11 @@ class DocumentService:
         raw_hash = hashlib.sha256(data).hexdigest()
         async with self._mutation_lock:
             previous = self._repo.find_by_doc_id(doc_id)
-            if previous is not None and previous.content_hash == raw_hash:
+            if (
+                previous is not None
+                and previous.content_hash == raw_hash
+                and previous.status != "failed"
+            ):
                 return UploadDecision(safe_name, doc_id, "skipped", previous.status)
             if previous is not None and previous.status == "pending":
                 return UploadDecision(
@@ -174,9 +188,12 @@ class DocumentService:
     def _safe_filename(filename: str) -> str:
         if not filename or "\x00" in filename:
             raise ParseError("文件名不能为空或包含非法字符")
-        name = Path(filename.replace("\\", "/")).name.strip().rstrip(". ")
+        basename = Path(filename.replace("\\", "/")).name
+        name = _UNSAFE_FILENAME_CHARS.sub("_", basename).strip().rstrip(". ")
         if not name or name in {".", ".."}:
             raise ParseError("文件名无效", filename=filename)
+        if Path(name).stem.casefold() in _WINDOWS_RESERVED_NAMES:
+            name = f"_{name}"
         return name
 
     @staticmethod
