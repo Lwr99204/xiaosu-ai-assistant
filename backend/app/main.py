@@ -23,6 +23,7 @@ from app.agent.orchestrator import build_orchestrator
 from app.api.documents import router as document_router
 from app.api.logs import router as log_router
 from app.api.middleware import RequestContextMiddleware, install_exception_handlers
+from app.api.settings import router as settings_router
 from app.config import Settings, get_settings
 from app.db.repositories import MessageRepo
 from app.im.base import IMAdapter
@@ -91,6 +92,7 @@ async def start_im(app: FastAPI, settings: Settings) -> WeComAdapter | None:
         adapter=adapter,
         deduper=MessageDeduper(repo=MessageRepo(settings.sqlite_path)),
     )
+    app.state.im_runner = runner
     task = asyncio.create_task(adapter.start(runner.handle), name="wecom-im")
     task.add_done_callback(_log_im_task_result)
     app.state.im_adapter = adapter
@@ -198,11 +200,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.store = get_store(resolved.mock_data_dir)
     app.state.document_service = None
 
+    def switch_model(model_id: str) -> None:
+        resolved.llm_model = model_id
+        service = build_agent_service(resolved, getattr(app.state, "rag_pipeline", None))
+        app.state.agent_service = service
+        runner = getattr(app.state, "im_runner", None)
+        if runner is not None:
+            runner.replace_service(service)
+        logger.info("对话模型已切换 model=%s", model_id)
+
+    app.state.switch_model = switch_model
+
     app.add_middleware(RequestContextMiddleware)
     install_exception_handlers(app)
     app.include_router(mock_router)
     app.include_router(document_router)
     app.include_router(log_router)
+    app.include_router(settings_router)
 
     @app.get("/api/health", response_model=HealthResponse, summary="健康检查")
     def health() -> HealthResponse:

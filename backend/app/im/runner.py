@@ -55,6 +55,10 @@ class IMRunner:
         self._adapter = adapter
         self._deduper = deduper
 
+    def replace_service(self, service: AgentService) -> None:
+        """原子替换后续消息使用的 AgentService，供后台切换模型。"""
+        self._service = service
+
     async def handle(self, msg: UnifiedMessage) -> None:
         """adapter 的 MessageHandler 入口。过滤 → 计时兜底 → 落回复。"""
         if not msg.text.strip():
