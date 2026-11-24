@@ -133,6 +133,23 @@ async def test_admin_log_list_detail_and_stats(tmp_path: Path) -> None:
         assert stats.json()["total"] == {"count": 1, "tokens": 120, "cost_cny": 0.12}
 
 
+async def test_model_settings_switch_without_exposing_credentials(client: httpx.AsyncClient) -> None:
+    current = await client.get("/api/settings/model")
+    assert current.status_code == 200
+    assert current.json()["available"]
+    assert "key" not in current.text.lower()
+
+    switched = await client.put(
+        "/api/settings/model", json={"model_id": "deepseek-v4-pro"}
+    )
+    assert switched.status_code == 200
+    assert switched.json() == {"ok": True, "current": "deepseek-v4-pro"}
+    assert (await client.get("/api/settings/model")).json()["current"] == "deepseek-v4-pro"
+
+    rejected = await client.put("/api/settings/model", json={"model_id": "unknown-model"})
+    assert rejected.status_code == 422
+
+
 # ── 员工查询（考题 Q4：员工 001 是哪个部门）───────────────────────
 
 
