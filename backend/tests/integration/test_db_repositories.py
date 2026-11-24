@@ -233,3 +233,35 @@ def test_deleting_conversation_cascades_to_tool_calls(db_path: Path) -> None:
         remaining = conn.execute("SELECT COUNT(*) AS total FROM tool_calls").fetchone()["total"]
 
     assert remaining == 0
+
+
+def test_conversation_admin_queries_filter_paginate_and_aggregate(db_path: Path) -> None:
+    repo = ConversationRepo(db_path)
+    first = make_record("知识库问题", "带引用回答")
+    first.platform = "wecom"
+    first.total_tokens = 120
+    first.cost_cny = 0.12
+    first_id = repo.insert(first)
+    repo.insert_tool_calls(
+        first_id,
+        [ToolCallEntry(1, "search_knowledge_base", "{}", "命中员工手册", True)],
+    )
+    second = make_record("网页问题", "普通回答", session_key="web:s1:admin")
+    second.platform = "web"
+    second.user_id = "admin"
+    second.total_tokens = 80
+    second.cost_cny = 0.08
+    second_id = repo.insert(second)
+
+    items, total = repo.list_paged(platform="wecom", has_tool_call=True)
+    assert total == 1
+    assert [item.id for item in items] == [first_id]
+    assert repo.find_by_id(second_id) is not None
+    assert repo.find_by_id(9999) is None
+
+    no_tools, no_tools_total = repo.list_paged(has_tool_call=False)
+    assert no_tools_total == 1
+    assert no_tools[0].id == second_id
+
+    stats = repo.stats()
+    assert (stats.count, stats.tokens, stats.cost_cny) == (2, 200, pytest.approx(0.2))

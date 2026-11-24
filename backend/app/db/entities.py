@@ -77,3 +77,12 @@ class QAPair:
 
     question: str
     answer: str
+
+
+@dataclass(frozen=True, slots=True)
+class UsageStats:
+    """对话数量、Token 与成本聚合，供后台统计卡片展示。"""
+
+    count: int
+    tokens: int
+    cost_cny: float

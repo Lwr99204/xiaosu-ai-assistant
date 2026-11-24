@@ -12,7 +12,7 @@ from contextlib import closing
 from pathlib import Path
 
 from app.db.engine import connect, now_iso
-from app.db.entities import ConversationRecord, DocumentRecord, QAPair, ToolCallEntry
+from app.db.entities import ConversationRecord, DocumentRecord, QAPair, ToolCallEntry, UsageStats
 
 logger = logging.getLogger(__name__)
 
@@ -232,6 +232,90 @@ class ConversationRepo:
             )
             for row in rows
         ]
+
+    def find_by_id(self, conversation_id: int) -> ConversationRecord | None:
+        with closing(connect(self._db_path)) as conn:
+            row = conn.execute(
+                "SELECT * FROM conversations WHERE id = ?", (conversation_id,)
+            ).fetchone()
+        return self._record_from_row(row) if row is not None else None
+
+    def list_paged(
+        self,
+        *,
+        offset: int = 0,
+        limit: int = 20,
+        platform: str | None = None,
+        user_id: str | None = None,
+        has_tool_call: bool | None = None,
+        start: str | None = None,
+        end: str | None = None,
+    ) -> tuple[list[ConversationRecord], int]:
+        """按时间倒序分页，并支持 TDD §5.1 约定的审计筛选条件。"""
+        if offset < 0 or limit <= 0:
+            raise ValueError("offset 必须 >= 0 且 limit 必须 > 0")
+        clauses: list[str] = []
+        params: list[object] = []
+        for column, value in (("platform", platform), ("user_id", user_id)):
+            if value:
+                clauses.append(f"c.{column} = ?")
+                params.append(value)
+        if start:
+            clauses.append("c.created_at >= ?")
+            params.append(start)
+        if end:
+            clauses.append("c.created_at <= ?")
+            params.append(end)
+        if has_tool_call is not None:
+            exists = "EXISTS" if has_tool_call else "NOT EXISTS"
+            clauses.append(
+                f"{exists} (SELECT 1 FROM tool_calls t WHERE t.conversation_id = c.id)"
+            )
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        with closing(connect(self._db_path)) as conn:
+            total = int(
+                conn.execute(f"SELECT COUNT(*) FROM conversations c{where}", params).fetchone()[0]
+            )
+            rows = conn.execute(
+                f"SELECT c.* FROM conversations c{where} ORDER BY c.id DESC LIMIT ? OFFSET ?",
+                [*params, limit, offset],
+            ).fetchall()
+        return [self._record_from_row(row) for row in rows], total
+
+    def stats(self, *, start: str | None = None) -> UsageStats:
+        where = " WHERE created_at >= ?" if start else ""
+        params: tuple[object, ...] = (start,) if start else ()
+        sql = (
+            "SELECT COUNT(*) AS count, COALESCE(SUM(total_tokens),0) AS tokens, "
+            f"COALESCE(SUM(cost_cny),0) AS cost_cny FROM conversations{where}"
+        )
+        with closing(connect(self._db_path)) as conn:
+            row = conn.execute(sql, params).fetchone()
+        return UsageStats(count=int(row["count"]), tokens=int(row["tokens"]), cost_cny=float(row["cost_cny"]))
+
+    @staticmethod
+    def _record_from_row(row: object) -> ConversationRecord:
+        return ConversationRecord(
+            id=row["id"],  # type: ignore[index]
+            request_id=row["request_id"],  # type: ignore[index]
+            session_key=row["session_key"],  # type: ignore[index]
+            platform=row["platform"],  # type: ignore[index]
+            user_id=row["user_id"],  # type: ignore[index]
+            user_name=row["user_name"] or "",  # type: ignore[index]
+            question=row["question"],  # type: ignore[index]
+            answer=row["answer"],  # type: ignore[index]
+            citations_json=row["citations_json"],  # type: ignore[index]
+            refused_by=row["refused_by"],  # type: ignore[index]
+            status=row["status"],  # type: ignore[index]
+            error_code=row["error_code"],  # type: ignore[index]
+            model=row["model"] or "",  # type: ignore[index]
+            prompt_tokens=row["prompt_tokens"] or 0,  # type: ignore[index]
+            completion_tokens=row["completion_tokens"] or 0,  # type: ignore[index]
+            total_tokens=row["total_tokens"] or 0,  # type: ignore[index]
+            cost_cny=row["cost_cny"] or 0.0,  # type: ignore[index]
+            latency_ms=row["latency_ms"] or 0,  # type: ignore[index]
+            created_at=row["created_at"],  # type: ignore[index]
+        )
 
 
 class MessageRepo:
