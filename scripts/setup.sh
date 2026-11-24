@@ -2,9 +2,6 @@
 # ═══════════════════════════════════════════════════════════════════════
 # setup.sh — 一次性初始化开发环境
 #
-# 状态：🚧 M0 骨架（步骤已注释齐全、可安全执行到占位处）
-#       完整实现与「克隆后一条命令启动」的最终验收在 M10（FR-6-01）
-#
 # 职责：装依赖 → 建库 → 导种子数据 → 装 Git 钩子
 # 前置：uv（题目硬性要求）、pnpm、Node ≥20、Git Bash
 # ═══════════════════════════════════════════════════════════════════════
@@ -27,9 +24,11 @@ fail() { printf '\033[31m[setup] ✗ %s\033[0m\n' "$*" >&2; exit 1; }
 log "1/6 检查前置工具 …"
 command -v uv   >/dev/null 2>&1 || fail "未找到 uv。安装：https://docs.astral.sh/uv/ （题目硬性要求用 uv 管理依赖）"
 command -v git  >/dev/null 2>&1 || fail "未找到 git。"
-# pnpm / node 在 M8 前端引入前不是硬依赖，缺失只警告
-command -v pnpm >/dev/null 2>&1 || log "  ⚠ 未找到 pnpm，前端（M8）相关步骤将跳过。安装：npm i -g pnpm"
+command -v node >/dev/null 2>&1 || fail "未找到 Node.js 20+。"
+command -v pnpm >/dev/null 2>&1 || fail "未找到 pnpm。请用 corepack enable 安装。"
 log "  uv $(uv --version 2>/dev/null || echo '?')"
+node_major="$(node --version | sed -E 's/^v([0-9]+).*/\1/')"
+[ "$node_major" -ge 20 ] || fail "Node.js 版本过低，要求 20+"
 
 # ── 步骤 2/6：.env 就位 ───────────────────────────────────────────────
 # 只复制不覆盖，避免把用户已填好的真实 key 冲掉
@@ -53,21 +52,18 @@ fi
 # ── 步骤 4/6：前端依赖 ────────────────────────────────────────────────
 log "4/6 安装前端依赖 …"
 if [ -f "$FRONTEND_DIR/package.json" ]; then
-  command -v pnpm >/dev/null 2>&1 \
-    && ( cd "$FRONTEND_DIR" && pnpm install --frozen-lockfile ) \
-    || log "  ⚠ 无 pnpm，跳过"
-  # M8：此处追加 openapi-typescript 生成 src/lib/api-types.ts
+  ( cd "$FRONTEND_DIR" && pnpm install --frozen-lockfile )
 else
   log "  ⚠ frontend/package.json 尚不存在（M8 引入），跳过"
 fi
 
 # ── 步骤 5/6：初始化数据库与种子数据 ──────────────────────────────────
 log "5/6 初始化存储 …"
-# M2 起启用：
-#   ( cd "$BACKEND_DIR" && uv run python -m app.db.engine --init )
-#   bash "$REPO_ROOT/scripts/seed_data.sh"
 mkdir -p "$REPO_ROOT/storage" "$REPO_ROOT/logs"
-log "  storage/ 与 logs/ 已就位（建表与语料导入待 M2）"
+( cd "$BACKEND_DIR" && uv run python -c \
+  "from app.config import get_settings; from app.db.engine import init_db; init_db(get_settings().sqlite_path)" )
+log "  SQLite、storage/ 与 logs/ 已就位"
+log "  首次启动会自动导入 data/knowledge；模型权重无需放进仓库"
 
 # ── 步骤 6/6：安装 Git pre-commit 钩子 ────────────────────────────────
 # 钩子做两件事：密钥扫描（FR-6-04 淘汰项）+ 规模门禁（FR-6-17）

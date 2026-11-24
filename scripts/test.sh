@@ -2,8 +2,6 @@
 # ═══════════════════════════════════════════════════════════════════════
 # test.sh — 一键跑全部门禁（TDD §10.3）
 #
-# 状态：🚧 M0 骨架；完整实现在 M10
-#
 # 🔴 铁律 3：本脚本从 M1 起就必须能跑通（哪怕只有 1 条测试），
 #    不允许到最后才补测试。
 #
@@ -34,26 +32,27 @@ bad()  { printf '\033[31m  ✗ %s\033[0m\n' "$*"; FAILED+=("$1"); }
 # ── 步骤 1/5：ruff check ──────────────────────────────────────────────
 step "1/5 ruff check（静态检查）"
 if [ -f "$BACKEND_DIR/pyproject.toml" ]; then
-  # M10：( cd "$BACKEND_DIR" && uv run ruff check . ) && ok "ruff check" || bad "ruff check"
-  ok "跳过（M1 引入 pyproject.toml 后启用）"
+  ( cd "$BACKEND_DIR" && uv run ruff check . ) && ok "ruff check" || bad "ruff check"
 else
   ok "跳过（backend 未初始化）"
 fi
 
 # ── 步骤 2/5：ruff format --check ─────────────────────────────────────
 step "2/5 ruff format --check（格式检查，不改写文件）"
-# M10：( cd "$BACKEND_DIR" && uv run ruff format --check . )
-ok "跳过（待 M10 启用）"
+if ( cd "$BACKEND_DIR" && uv run ruff format --check . ); then
+  ok "ruff format --check"
+else
+  bad "ruff format --check"
+fi
 
 # ── 步骤 3/5：pytest ──────────────────────────────────────────────────
 step "3/5 pytest --cov（单元 / 集成 / e2e）"
 if [ -d "$BACKEND_DIR/tests" ] && [ -f "$BACKEND_DIR/pyproject.toml" ]; then
-  # M10 启用：
-  #   ( cd "$BACKEND_DIR" && uv run pytest tests/ --cov=app \
-  #       --cov-report=term-missing --cov-fail-under=85 )
-  # 覆盖率目标：rag/ 与 agent/ ≥85%（TDD §10.3）
-  # 测试目录分层：tests/unit · tests/integration · tests/e2e（TDD §3 约定 5）
-  ok "跳过（待 M1 首批测试落地后启用）"
+  if ( cd "$BACKEND_DIR" && uv run pytest tests/ --cov=app/rag --cov=app/agent --cov-report=term-missing ); then
+    ok "pytest + rag/agent coverage"
+  else
+    bad "pytest"
+  fi
 else
   ok "跳过（tests/ 尚无测试文件 —— M0 只有 .gitkeep）"
 fi
@@ -70,8 +69,11 @@ fi
 # ── 步骤 5/5：前端类型检查 ────────────────────────────────────────────
 step "5/5 tsc --noEmit（前端类型检查）"
 if [ -f "$FRONTEND_DIR/package.json" ]; then
-  # M10：pnpm --dir "$FRONTEND_DIR" exec tsc --noEmit
-  ok "跳过（待 M8 前端落地后启用）"
+  if pnpm --dir "$FRONTEND_DIR" typecheck; then
+    ok "前端类型检查"
+  else
+    bad "前端类型检查"
+  fi
 else
   ok "跳过（frontend 未初始化）"
 fi

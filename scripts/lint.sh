@@ -2,8 +2,6 @@
 # ═══════════════════════════════════════════════════════════════════════
 # lint.sh — 代码风格与类型检查
 #
-# 状态：🚧 M0 骨架；完整实现并在 Git Bash 下实测通过是 M10 的任务
-#
 # 与 test.sh 的分工：lint.sh 只做**风格与类型**（快，秒级），
 # test.sh 做**行为**（含 pytest 与 check_limits）。
 # 提交前想快速自查用本脚本；完整门禁用 scripts/test.sh。
@@ -25,9 +23,7 @@ bad()  { printf '\033[31m  ✗ %s\033[0m\n' "$*"; FAILED+=("$1"); }
 # ── 步骤 1/4：ruff check（后端静态检查）──────────────────────────────
 step "1/4 ruff check"
 if [ -f "$BACKEND_DIR/pyproject.toml" ]; then
-  # M10：( cd "$BACKEND_DIR" && uv run ruff check . ) && ok "ruff check" || bad "ruff check"
-  # 规则集在 backend/pyproject.toml 的 [tool.ruff.lint] 中声明
-  ok "跳过（待 M10 启用）"
+  ( cd "$BACKEND_DIR" && uv run ruff check . ) && ok "ruff check" || bad "ruff check"
 else
   ok "跳过（backend 未初始化）"
 fi
@@ -36,8 +32,8 @@ fi
 # 只检查不改写：CI/钩子里绝不允许自动改文件，否则会产生「本地过、CI 挂」
 step "2/4 ruff format --check"
 if [ -f "$BACKEND_DIR/pyproject.toml" ]; then
-  # M10：( cd "$BACKEND_DIR" && uv run ruff format --check . )
-  ok "跳过（待 M10 启用）"
+  ( cd "$BACKEND_DIR" && uv run ruff format --check . ) \
+    && ok "ruff format --check" || bad "ruff format --check"
 else
   ok "跳过（backend 未初始化）"
 fi
@@ -45,8 +41,8 @@ fi
 # ── 步骤 3/4：前端 tsc --noEmit + eslint ──────────────────────────────
 step "3/4 前端类型检查（tsc --noEmit）"
 if [ -f "$FRONTEND_DIR/package.json" ]; then
-  # M10：pnpm --dir "$FRONTEND_DIR" lint   （package.json 的 lint 脚本已含 tsc --noEmit）
-  ok "跳过（待 M8 前端落地后启用）"
+  pnpm --dir "$FRONTEND_DIR" lint \
+    && ok "前端类型检查" || bad "前端类型检查"
 else
   ok "跳过（frontend 未初始化）"
 fi
