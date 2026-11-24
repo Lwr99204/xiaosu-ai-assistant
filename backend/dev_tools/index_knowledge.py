@@ -6,9 +6,10 @@ import argparse
 import asyncio
 from pathlib import Path
 
-from app.config import REPO_ROOT
-from app.rag.loaders import SUPPORTED_EXTS
+from app.config import REPO_ROOT, get_settings
+from app.rag.loaders import SUPPORTED_EXTS, normalize_doc_id
 from app.rag.pipeline import build_pipeline
+from app.services.document_service import DocumentService
 
 
 def _documents(directory: Path) -> list[Path]:
@@ -23,22 +24,28 @@ async def index_directory(directory: Path) -> int:
     files = _documents(directory)
     if not files:
         raise SystemExit(f"没有找到可索引文档: {directory}")
-    pipeline = build_pipeline()
+    settings = get_settings()
+    pipeline = build_pipeline(settings)
+    service = DocumentService(settings=settings, pipeline=pipeline)
     try:
         await pipeline.warmup()
-        total_chunks = 0
         for path in files:
-            result = await pipeline.index_file(path)
-            total_chunks += result.chunk_count
-            print(
-                f"indexed {result.filename}: chunks={result.chunk_count} "
-                f"hash={result.content_hash[:12]}"
+            decision = await service.submit(path.name, path.read_bytes())
+            print(f"queued {decision.filename}: action={decision.action} status={decision.status}")
+        await service.drain()
+
+        records = [service.get_document(normalize_doc_id(path.name)) for path in files]
+        failed = [record for record in records if record.status != "indexed"]
+        if failed:
+            detail = "; ".join(
+                f"{record.filename}: {record.error_message or record.status}" for record in failed
             )
-        print(
-            f"done: documents={len(files)} chunks={total_chunks} directory={directory}"
-        )
+            raise RuntimeError(f"种子文档索引失败: {detail}")
+        total_chunks = sum(record.chunk_count for record in records)
+        print(f"done: documents={len(records)} chunks={total_chunks} directory={directory}")
         return len(files)
     finally:
+        await service.drain()
         await pipeline.close()
 
 

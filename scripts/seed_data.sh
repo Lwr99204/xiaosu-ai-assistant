@@ -6,7 +6,7 @@
 #
 # 两类数据，来源不同：
 #   · data/mock/*.json      —— 员工/考勤/订单，M1 由脚本生成后**入库**
-#   · data/knowledge/*      —— 7 篇知识库语料，M2 生成后**入库**
+#   · data/knowledge/*      —— 当前 4 篇核心知识库语料，后续扩展到 7 篇
 #                              其中 .pdf/.docx 无法手写，必须由
 #                              backend/dev_tools/gen_seed_docs.py 从 .md 真源转换
 #
@@ -47,16 +47,17 @@ fi
 #    且「CEO 家庭住址 / 2030 销售目标」必须**刻意不在**语料里（用于验证拒答）。
 log "3/4 校验知识库语料 …"
 count="$(find "$KNOWLEDGE_DIR" -maxdepth 1 -type f ! -name '.gitkeep' 2>/dev/null | wc -l | tr -d ' ')"
-log "  data/knowledge/ 现有 $count 个文件（M2 目标：7 篇）"
-if [ "$count" -lt 7 ]; then
-  log "  ⚠ 语料不足 7 篇，验收题 Q1-Q10 将无法全部通过（M2 补齐）"
+log "  data/knowledge/ 现有 $count 个文件（M4 核心集：4 篇；最终目标：7 篇）"
+if [ "$count" -lt 4 ]; then
+  fail "核心语料不足 4 篇，停止索引"
+elif [ "$count" -lt 7 ]; then
+  log "  ⚠ 当前核心验收可用，最终交付前仍需扩展到 7 篇"
 fi
 
 # ── 步骤 4/4：导入并建索引 ────────────────────────────────────────────
-log "4/4 导入数据库 …"
-# M2：落盘 + 建 documents 记录（status=pending）
-#   ( cd "$BACKEND_DIR" && uv run python -m app.db.engine --init )
-# M4：触发解析 → 分块 → embedding → 原子写入 Chroma。
+log "4/4 导入数据库并建立向量索引 …"
+# M4：通过 DocumentService 同步原文件与 documents 状态记录，并触发
+# 解析 → 分块 → embedding → 原子写入 Chroma。
 # 脚本会先检查并预热 127.0.0.1:8001；服务未启动时给出可操作提示并失败退出，
 # 不会把「没建索引」伪装成成功。
 ( cd "$BACKEND_DIR" && uv run python dev_tools/index_knowledge.py )
