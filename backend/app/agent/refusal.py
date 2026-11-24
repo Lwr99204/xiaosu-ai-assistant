@@ -48,6 +48,14 @@ PRIVACY_REFUSAL = "这类信息涉及个人隐私，我无法提供"
 
 NOT_FOUND_REPLY = "文档里没有找到相关信息，建议换个说法再问，或联系 HR。"
 
+#: 检索阈值拒答话术（TDD §4.4.4 表格第一行）。带上查询词是刻意的：让用户确认系统
+#: 听懂了问题、只是文档里确实没有，而不是答非所问。与 NOT_FOUND_REPLY 的区别在于
+#: 前者由代码在「命中为空」时直接返回（不进模型），后者是模型自己按 system prompt
+#: 第 3 条给出的回答，或 L3 撤回后使用的兜底文本。
+THRESHOLD_REFUSAL_TEMPLATE = (
+    "我在公司文档里没有找到和「{query}」相关的内容，建议换个说法再问，或联系 HR。"
+)
+
 TOOL_ROUNDS_EXCEEDED_REPLY = "这个问题有点复杂，我没能得出确定答案，建议拆分后重新提问。"
 
 # 验收题 Q10：把 API Key 改成无效值后，IM 里必须收到友好回复，
@@ -69,6 +77,11 @@ def detect_sensitive(question: str) -> str | None:
         if pattern in question:
             return pattern
     return None
+
+
+def threshold_refusal(query: str) -> str:
+    """生成检索阈值拒答话术。query 为空时退化成通用话术，避免出现空的「「」」。"""
+    return THRESHOLD_REFUSAL_TEMPLATE.format(query=query) if query else NOT_FOUND_REPLY
 
 
 def extract_citations(answer: str) -> list[int]:
