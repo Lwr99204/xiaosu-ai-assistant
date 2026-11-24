@@ -102,6 +102,12 @@ async def test_document_api_full_lifecycle(document_client) -> None:
     detail = await client.get("/api/documents/员工手册.md")
     assert detail.json()["version"] == 2
 
+    reindex = await client.post("/api/documents/员工手册.md/reindex")
+    assert reindex.status_code == 202
+    assert (reindex.json()["status"], reindex.json()["version"]) == ("pending", 2)
+    await service.drain()
+    assert (await client.get("/api/documents/员工手册.md")).json()["status"] == "indexed"
+
     deleted = await client.delete("/api/documents/员工手册.md")
     assert deleted.status_code == 200
     assert deleted.json() == {"deleted_chunks": 2}

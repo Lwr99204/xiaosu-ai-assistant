@@ -89,6 +89,16 @@ async def get_document_content(request: Request, doc_id: str) -> DocumentContent
     return DocumentContent(doc_id=record.doc_id, filename=record.filename, content=content)
 
 
+@router.post(
+    "/{doc_id}/reindex",
+    response_model=DocumentMeta,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def reindex_document(request: Request, doc_id: str) -> DocumentMeta:
+    pending = await _service(request).reindex(doc_id)
+    return DocumentMeta.model_validate(pending)
+
+
 @router.delete("/{doc_id}", response_model=DeleteDocumentResponse)
 async def delete_document(request: Request, doc_id: str) -> DeleteDocumentResponse:
     deleted = await _service(request).delete(doc_id)
