@@ -203,3 +203,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     return app
+
+
+# 兼容部署文档中的 ``uvicorn app.main:app``，同时保持模块导入时不读取真实 .env。
+# 首个 ASGI lifespan 调用才构造 FastAPI，因此单测仍可显式 create_app(test_settings)。
+_runtime_app: FastAPI | None = None
+
+
+async def app(scope, receive, send) -> None:
+    global _runtime_app
+    if _runtime_app is None:
+        _runtime_app = create_app()
+    await _runtime_app(scope, receive, send)
