@@ -27,6 +27,7 @@ dependencies = [
     "onnxruntime>=1.20",             # 临时开发机无 Torch 时运行 bge-m3 ONNX 权重
     "tokenizers>=0.20",              # 直接读取 bge-m3 自带 tokenizer.json
     "wecom-aibot-python-sdk>=1.0.2,<2", # Gate 0：企业微信智能机器人长连接探针
+    "python-multipart>=0.0.12",
 ]
 
 [dependency-groups]
