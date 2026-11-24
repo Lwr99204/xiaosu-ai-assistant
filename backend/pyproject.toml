@@ -24,6 +24,8 @@ dependencies = [
     "chromadb>=0.5",                 # 向量库（M3 起使用；按 doc_id 删除分块是硬需求）
     "pypdf>=5.1",                    # PDF 解析（M2/M3）
     "python-docx>=1.1",              # Word 解析（M2/M3）
+    "onnxruntime>=1.20",             # 临时开发机无 Torch 时运行 bge-m3 ONNX 权重
+    "tokenizers>=0.20",              # 直接读取 bge-m3 自带 tokenizer.json
     "wecom-aibot-python-sdk>=1.0.2,<2", # Gate 0：企业微信智能机器人长连接探针
 ]
 
