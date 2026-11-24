@@ -39,6 +39,7 @@ from app.agent.refusal import (
     check_citations,
     detect_sensitive,
     pick_citations,
+    threshold_refusal,
 )
 from app.agent.tool_registry import ToolRegistry
 from app.config import Settings
@@ -104,21 +105,34 @@ def _trim_history(history: Sequence[ChatMessage], max_turns: int) -> list[ChatMe
     return [*usable[:2], *usable[-(budget - 2) :]]
 
 
-def _extract_hits(output: str) -> list[Mapping[str, Any]]:
-    """从工具输出里取出命中列表，供 L3 引用校验。
+def _knowledge_payload(output: str) -> tuple[bool, list[Mapping[str, Any]]]:
+    """解析知识库工具输出，返回 (检索是否成功执行, 命中列表)。
 
-    刻意写成「解析 JSON 后看有没有 list 型 hits 键」这种数据驱动形式，而不是在
-    编排器里硬编码知识库的返回结构：tools/knowledge.py 的输出字段以后调整，
-    这里不用跟着改，也就不会形成 agent → tools 的反向依赖。
+    刻意写成「解析 JSON 后看 ok 与 hits 两个键」这种数据驱动形式，而不是在编排器里
+    硬编码知识库的返回结构：tools/knowledge.py 的输出字段以后调整，这里不用跟着改，
+    也就不会形成 agent → tools 的反向依赖。
+
+    区分 ok=False 与 ok=True+空命中很重要。前者是检索器没接上（部署问题），必须把
+    错误说明喂回模型让它如实告知，不能当成「查过了但没有」，否则验收题 Q9 那种正常
+    的不知道回答会和「索引根本没建」混成同一句话，掩盖真实的运维故障。
     """
     try:
         payload = json.loads(output)
     except json.JSONDecodeError:
-        return []
+        return False, []
     if not isinstance(payload, Mapping):
-        return []
+        return False, []
     hits = payload.get("hits")
-    return list(hits) if isinstance(hits, list) else []
+    return bool(payload.get("ok")), (list(hits) if isinstance(hits, list) else [])
+
+
+def _query_of(arguments: str) -> str:
+    """从工具调用参数里取出 query，用于拼阈值拒答话术。解析失败返回空串。"""
+    try:
+        payload = json.loads(arguments)
+    except json.JSONDecodeError:
+        return ""
+    return str(payload.get("query", "")) if isinstance(payload, Mapping) else ""
 
 
 def _finalize(text: str, hits: Sequence[Mapping[str, Any]], knowledge_used: bool) -> tuple:
@@ -314,7 +328,30 @@ class Orchestrator:
                 yield AgentEvent(kind="tool_call", tool_call=record)
                 if call.name == KNOWLEDGE_TOOL_NAME:
                     knowledge_used = True
-                    hits.extend(_extract_hits(result.output))
+                    searched, found = _knowledge_payload(result.output)
+                    hits.extend(found)
+                    # 检索阈值拒答（TDD §4.4.4 表格第一行）：命中全被阈值滤空时不再
+                    # 把空【参考资料】喂回模型，省一次 LLM 调用，也避免模型面对空资料
+                    # 自己编答案。判据取自工具返回的 ok 与 hits 字段，不是问题文本，
+                    # 因此不构成被禁止的关键词路由。
+                    if result.ok and searched and not found:
+                        answer = threshold_refusal(_query_of(call.arguments))
+                        logger.info("threshold refusal triggered")
+                        yield AgentEvent(kind="delta", text=answer)
+                        yield AgentEvent(kind="usage", usage=usage)
+                        yield AgentEvent(
+                            kind="done",
+                            reply=AgentReply(
+                                answer=answer,
+                                status="refused",
+                                tool_calls=tuple(tool_records),
+                                usage=usage,
+                                refused_by="threshold",
+                                latency_ms=timer.stop(),
+                                prompt_version=SYSTEM_PROMPT_VERSION,
+                            ),
+                        )
+                        return
                 messages.append(
                     ChatMessage(
                         role="tool",

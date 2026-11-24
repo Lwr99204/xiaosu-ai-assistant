@@ -12,7 +12,7 @@ import json
 import pytest
 
 from app.agent.orchestrator import build_orchestrator
-from app.agent.refusal import NOT_FOUND_REPLY, PRIVACY_REFUSAL
+from app.agent.refusal import NOT_FOUND_REPLY, PRIVACY_REFUSAL, threshold_refusal
 from app.llm.base import ChatMessage
 from app.llm.mock import MockLLMProvider, text_reply, tool_reply
 from app.tools import build_tool_registry
@@ -261,3 +261,27 @@ async def test_knowledge_tool_reports_unavailable_before_index(ask_agent):
     # 工具算「用过知识库」，终答又没带引用 → L3 撤回
     assert reply.status == "refused"
     assert reply.answer == NOT_FOUND_REPLY
+
+
+async def test_empty_successful_retrieval_refuses_without_second_llm_call(mock_settings):
+    """L1：检索正常执行但阈值过滤为空，直接拒答且不再调用模型。"""
+
+    async def empty_search(_query: str, _top_k: int):
+        return []
+
+    registry = build_tool_registry(mock_settings, knowledge_search=empty_search)
+    llm = MockLLMProvider(
+        [
+            tool_reply(("search_knowledge_base", {"query": "2030 年销售目标"})),
+            text_reply("这条不应被调用。"),
+        ]
+    )
+    orchestrator = build_orchestrator(mock_settings, llm, registry)
+    events = [event async for event in orchestrator.ask("2030 年销售目标是多少？")]
+    reply = next(event.reply for event in events if event.kind == "done")
+    assert reply is not None
+    assert reply.status == "refused"
+    assert reply.refused_by == "threshold"
+    assert reply.answer == threshold_refusal("2030 年销售目标")
+    assert len(llm.calls) == 1
+    assert llm.remaining == 1
