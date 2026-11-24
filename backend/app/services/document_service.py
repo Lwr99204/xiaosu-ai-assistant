@@ -7,7 +7,7 @@ import contextlib
 import hashlib
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from app.config import Settings
@@ -148,6 +148,40 @@ class DocumentService:
             self._repo.delete(normalized)
             await self._unlink(record.storage_path)
             return deleted_chunks
+
+    async def reindex(self, doc_id: str) -> DocumentRecord:
+        """后台重建现有原文件；失败时恢复调用前的完整状态。"""
+        normalized = normalize_doc_id(doc_id)
+        async with self._mutation_lock:
+            previous = self._repo.find_by_doc_id(normalized)
+            if previous is None:
+                raise NotFoundError("文档不存在", doc_id=doc_id)
+            if previous.status == "pending":
+                raise RAGError(
+                    "文档正在索引",
+                    code="DOCUMENT_BUSY",
+                    http_status=409,
+                    retryable=True,
+                    doc_id=normalized,
+                )
+            if not previous.storage_path or not Path(previous.storage_path).is_file():
+                raise NotFoundError("文档原文件不存在", doc_id=doc_id)
+            pending = replace(
+                previous,
+                status="pending",
+                chunk_count=0,
+                error_message=None,
+                updated_at=now_iso(),
+                indexed_at=None,
+            )
+            self._repo.upsert(pending)
+            task = asyncio.create_task(
+                self._index_pending(pending, previous),
+                name=f"reindex-document:{normalized}:v{pending.version}",
+            )
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
+            return pending
 
     async def drain(self) -> None:
         """等待当前后台索引结束；测试与优雅停机共用。"""

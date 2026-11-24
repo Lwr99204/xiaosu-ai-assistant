@@ -133,3 +133,22 @@ async def test_failed_document_can_retry_same_content_and_filename_is_sanitized(
     record = service.get_document("薪酬_制度.md")
     assert (record.status, record.version) == ("indexed", 2)
     assert len(pipeline.indexed) == 2
+
+
+@pytest.mark.asyncio
+async def test_reindex_keeps_version_and_restores_state_on_failure(tmp_path: Path) -> None:
+    pipeline = _Pipeline()
+    service = DocumentService(settings=_settings(tmp_path), pipeline=pipeline)  # type: ignore[arg-type]
+    await service.submit("制度.md", "# 制度\n正文".encode())
+    await service.drain()
+
+    pending = await service.reindex("制度.md")
+    assert (pending.status, pending.version) == ("pending", 1)
+    await service.drain()
+    assert service.get_document("制度.md").version == 1
+
+    before_failure = service.get_document("制度.md")
+    pipeline.fail = True
+    await service.reindex("制度.md")
+    await service.drain()
+    assert service.get_document("制度.md") == before_failure
