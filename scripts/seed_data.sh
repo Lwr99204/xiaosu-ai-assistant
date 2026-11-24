@@ -56,8 +56,9 @@ fi
 log "4/4 导入数据库 …"
 # M2：落盘 + 建 documents 记录（status=pending）
 #   ( cd "$BACKEND_DIR" && uv run python -m app.db.engine --init )
-# M4 之后：真正触发解析 → 分块 → embedding → 写入 Chroma
-#   curl -s -X POST http://localhost:8000/api/documents/reindex-all
-log "  ⚠ 导入逻辑待 M2/M4 实现"
+# M4：触发解析 → 分块 → embedding → 原子写入 Chroma。
+# 脚本会先检查并预热 127.0.0.1:8001；服务未启动时给出可操作提示并失败退出，
+# 不会把「没建索引」伪装成成功。
+( cd "$BACKEND_DIR" && uv run python dev_tools/index_knowledge.py )
 
-log "✅ seed_data 完成（M0 阶段为骨架）"
+log "✅ seed_data 完成"
