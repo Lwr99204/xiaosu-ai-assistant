@@ -215,8 +215,8 @@ curl -s http://127.0.0.1:8001/health   # {"status":"ok","model":"bge-m3","loaded
 
 ## 验收截图
 
-Web 管理后台的真实运行截图如下；企微真实对话截图与 30 秒录屏仍待人工补入，详见
-[`docs/screenshots/README.md`](docs/screenshots/README.md)。未用示意图替代企微真机证据。
+Web 管理后台与企业微信真机问答截图如下；30 秒以内的操作录屏仍待补入，详见
+[`docs/screenshots/README.md`](docs/screenshots/README.md)。企微截图为真实客户端原图。
 
 ### 文档管理
 
@@ -229,3 +229,11 @@ Web 管理后台的真实运行截图如下；企微真实对话截图与 30 秒
 ### 系统设置
 
 ![系统设置：当前模型、企微连接与组件健康状态](docs/screenshots/03-settings.png)
+
+### 企业微信真机问答
+
+![报销材料问答与知识库引用](docs/screenshots/04-wecom-reimbursement.png)
+
+![年假天数问答与知识库引用](docs/screenshots/05-wecom-annual-leave.png)
+
+![隐私问题与知识库未命中问题的拒答](docs/screenshots/06-wecom-boundary-refusal.png)
