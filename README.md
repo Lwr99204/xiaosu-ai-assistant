@@ -3,8 +3,30 @@
 > 一个**跑在企业微信里**的公司内部 AI 助手：员工 @小苏 提问，它自己决定查知识库、
 > 查内部系统还是算数，给出**带原文引用**的答案，答不上来就老实说不知道。
 
-🚧 **当前状态：Gate 0（企业微信长连接风险验证）已通过，M1（后端骨架 + Mock API）开发中。**
-本 README 为骨架版，完整版（含截图、架构图、验收记录）在 M12 交付。
+**当前状态：**后端、RAG/文档管理、Function Calling、企业微信长连接和 Web 管理页已实现；
+自动化与人工验收正在收口。企微实测见 [`docs/验收记录.md`](docs/验收记录.md)。
+
+## 架构概览
+
+```mermaid
+flowchart LR
+  IM[企业微信智能机器人\nWebSocket 长连接] --> AD[WeCom Adapter\n消息归一化/去重/会话隔离]
+  WEB[Web 管理后台\n文档/日志/设置] --> API[FastAPI API]
+  AD --> AG[AgentService + Orchestrator\n模型 Function Calling]
+  API --> AG
+  AG --> LLM[OpenAI 兼容模型\nqwen3.8-max]
+  AG --> TOOLS[ToolRegistry]
+  TOOLS --> MOCK[Mock 员工/考勤/订单 API]
+  TOOLS --> CLOCK[时间/计算器]
+  TOOLS --> KB[知识库工具]
+  KB --> RAG[RAG Pipeline\n分块/引用/阈值拒答]
+  RAG --> EMB[BGE-M3 Embedding\n127.0.0.1:8001]
+  RAG --> CHROMA[(Chroma)]
+  AG --> DB[(SQLite\n对话与工具日志)]
+```
+
+端口与职责：后端 `8010`、前端 `3001`、本地 BGE-M3 服务 `8001`。企业微信和 Web 入口共用
+`AgentService`，工具选择由模型 Function Calling 完成；只有知识库来源的答案执行 `[n]` 引用校验。
 
 ---
 
@@ -79,20 +101,37 @@ xiaosu-ai-assistant/
 
 ## 快速开始
 
-> 🚧 **占位**：M0 只交付脚本骨架，「克隆后一条命令启动」（FR-6-01）的完整实现
-> 与最终验收在 **M10**。当前可用的是 `scripts/check_limits.sh`。
+端口通过 `.env` 外置配置；默认后端为 8010、前端为 3001、Embedding 为 8001。
+不要为本项目抢占其他服务正在使用的 8000/3000。
 
-**前置依赖**：`uv`、`pnpm`、Node ≥20、Git Bash（Windows 用户必须用 Git Bash 跑 `scripts/*.sh`）
+**前置依赖**：Python 3.12、uv、Node 22、pnpm、Git Bash（Windows 跑 `scripts/*.sh`）；
+Windows 也可直接用 PowerShell 的 `scripts/start.ps1`。
 
 ```bash
 git clone https://github.com/Lwr99204/xiaosu-ai-assistant.git
 cd xiaosu-ai-assistant
 cp .env.example .env          # 填入 LLM_API_KEY
 bash scripts/setup.sh         # 装依赖 + 建库 + 装 Git 钩子
-bash scripts/start.sh         # 起后端 :8000 + 前端 :3000 + IM 长连接
+bash scripts/start.sh         # 起后端 :8010 + 前端 :3001 + IM 长连接
 ```
 
-**RAG 需要额外的本地 embedding 服务**（M3 起为硬依赖）：
+Windows PowerShell 中初始化（显式调用 Git for Windows 自带 Bash，避免 `bash` 被解析到 WSL）：
+
+```powershell
+$gitCmd = (Get-Command git).Source
+$gitRoot = Split-Path (Split-Path $gitCmd -Parent) -Parent
+& (Join-Path $gitRoot 'bin\bash.exe') scripts/setup.sh
+```
+
+初始化完成后，Windows PowerShell 启停：
+
+```powershell
+.\scripts\start.ps1 -NoPause
+.\scripts\start.ps1 -Stop
+```
+
+**RAG 需要额外的本地 embedding 服务**（M3 起为硬依赖）。启动主栈前先检查
+`http://127.0.0.1:8001/health`；若已健康，不要重复启动该服务。
 
 ```bash
 # 另开一个终端
@@ -112,14 +151,14 @@ curl -s http://127.0.0.1:8001/health   # {"status":"ok","model":"bge-m3","loaded
 
 | 命令 | 作用 | 当前状态 |
 |---|---|---|
-| `bash scripts/setup.sh` | 初始化环境、装依赖、装 Git 钩子 | 🚧 骨架（M10 完整） |
-| `bash scripts/start.sh` | 一条命令启动全部服务 | 🚧 骨架（M10 完整） |
-| `bash scripts/stop.sh` | 停止服务（按端口兜底清理） | 🚧 骨架（M10 完整） |
-| `bash scripts/test.sh` | ruff + pytest + 规模门禁 + tsc | 🚧 骨架（M1 起逐步启用） |
-| `bash scripts/lint.sh` | 风格与类型检查 + `.sh` 行尾符自检 | 🚧 骨架（含可用的 LF 检查） |
+| `bash scripts/setup.sh` | 初始化依赖与本地数据 | 可用，按目标机环境执行 |
+| `bash scripts/start.sh` | 启动后端与前端；先确认 embedding 健康 | 可用 |
+| `bash scripts/stop.sh` | 停止脚本记录的项目进程 | 可用；Windows 推荐 PowerShell 脚本 |
+| `bash scripts/test.sh` | Ruff、pytest、规模门禁、前端检查 | 可用 |
+| `bash scripts/lint.sh` | 风格、类型与 `.sh` 行尾检查 | 可用 |
 | `bash scripts/check_limits.sh` | **≤500 行 / ≤8 文件 门禁** | ✅ **已完整实现** |
 | `bash scripts/seed_data.sh` | 生成并导入语料与 mock 数据 | 🚧 骨架（M2 起） |
-| `bash scripts/acceptance_check.sh` | 跑可自动化的验收项 | 🚧 骨架（M7 起） |
+| `bash scripts/acceptance_check.sh` | API、文档链路与 MockLLM 回归验收 | 可用；真机项目仍须人工执行 |
 
 ---
 
@@ -132,8 +171,8 @@ curl -s http://127.0.0.1:8001/health   # {"status":"ok","model":"bge-m3","loaded
 2. **只统计代码文件**（`.py` / `.ts` / `.tsx` / `.js` / `.jsx`）。截图、录屏、`.md` 语料、
    `.pdf` / `.docx` 等资源与文档**不计入** —— 否则 `docs/screenshots/` 放十几张验收截图就误报。
    同理，`__init__.py` 与 `.gitkeep` 不计入目录文件数，但 `__init__.py` **仍受 500 行约束**。
-3. **根目录文件数 = 7**：`.env.example`、`.gitignore`、`.gitattributes`、`docker-compose.yml`、
-   `README.md`、`AI_USAGE.md`、`自评.md`。`backend/`、`frontend/`、`scripts/`、`data/`、
+3. **仓库根目录交付文件共 5 个**：`.env.example`、`.gitignore`、`.gitattributes`、
+   `README.md`、`AI_USAGE.md`。自评和验收记录位于 `docs/`。`backend/`、`frontend/`、`scripts/`、`data/`、
    `docs/`、`evals/`、`logs/` 都是**目录**，不计入。
 
 ⚠️ `scripts/`（8 个）与 `backend/tests/unit/`（8 个）**已达上限**，后续新增必须先建子目录。
@@ -152,22 +191,14 @@ curl -s http://127.0.0.1:8001/health   # {"status":"ok","model":"bge-m3","loaded
 
 | 里程碑 | 内容 | 状态 |
 |---|---|---|
-| Gate 0 | 企业微信长连接风险验证（CURRENT_PLAN 新增前置阶段） | ✅ 完成 |
-| M0 | 仓库骨架与工程基线 | ✅ 完成 |
-| M1 | 后端骨架 + Mock 内部 API | 🔄 进行中（config / logging 基础设施已完成） |
-| M2 | 存储层 + 种子语料 | ⬜ |
-| M3 | RAG 管道核心（分块带偏移 / 检索 / 引用） | ⬜ |
-| M4 | 文档服务与上传链路 | ⬜ |
-| M5 | LLM 适配层 + MockLLM | ⬜ |
-| M6 | 工具系统 + Agent 编排 | ⬜ |
-| M7 | 问答链路打通（Web SSE） | ⬜ |
-| M8 | Web 管理后台 | ⬜ |
-| M9 | ⭐ 企业微信 IM 集成 | ⬜ |
-| M10 | 工程化收尾与质量门禁 | ⬜ |
-| M11 | 加分项（成本展示 / 多模型 / Evals / 飞书） | ⬜ |
-| M12 | 文档收尾与验收交付 | ⬜ |
+| Gate 0 | 企业微信长连接风险验证 | ✅ 完成 |
+| M1–M3 | 后端、Mock API、工具 Agent、会话与企微主链路 | ✅ 实现完成；真机题目继续验收 |
+| M4 | RAG 与文档管理 | ✅ 实现完成；引用问题修复中 |
+| M5 | Web 管理后台 | ✅ 核心页面完成 |
+| M6 | 工程化与交付 | 🔄 自动验收和交付材料收尾中 |
+| M11 | 多模型、Evals、第二 IM 等加分项 | ⏸ P0 验收后再评估 |
 
-完整任务拆解与验收动作见 [`docs/DEV_PLAN.md`](docs/DEV_PLAN.md)。
+执行基线和人工验收记录见 [`docs/CURRENT_PLAN.md`](docs/CURRENT_PLAN.md) 与 [`docs/验收记录.md`](docs/验收记录.md)。
 
 ---
 
@@ -180,4 +211,21 @@ curl -s http://127.0.0.1:8001/health   # {"status":"ok","model":"bge-m3","loaded
 | [`docs/DEV_PLAN.md`](docs/DEV_PLAN.md) | 按什么顺序做、每步交付什么、怎么提交 |
 | [`backend/dev_tools/README.md`](backend/dev_tools/README.md) | 开发期工具与本地 embedding 服务 |
 | `AI_USAGE.md` | AI 使用方式与踩坑复盘（M12 交付，素材见 `docs/ai_journal.md`） |
-| `自评.md` | 技术决策取舍与已知不足（M12 交付） |
+| [`docs/自评.md`](docs/自评.md) | 对照考题的自评、扣分点与取舍（M12 交付） |
+
+## 验收截图
+
+Web 管理后台的真实运行截图如下；企微真实对话截图与 30 秒录屏仍待人工补入，详见
+[`docs/screenshots/README.md`](docs/screenshots/README.md)。未用示意图替代企微真机证据。
+
+### 文档管理
+
+![文档管理：已索引文档与分块数](docs/screenshots/01-documents.png)
+
+### 对话日志
+
+![对话日志：问题、工具调用、Token 与耗时](docs/screenshots/02-logs.png)
+
+### 系统设置
+
+![系统设置：当前模型、企微连接与组件健康状态](docs/screenshots/03-settings.png)
