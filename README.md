@@ -215,7 +215,7 @@ curl -s http://127.0.0.1:8001/health   # {"status":"ok","model":"bge-m3","loaded
 
 ## 验收截图
 
-Web 管理后台与企业微信真机问答截图如下；30 秒以内的操作录屏仍待补入，详见
+Web 管理后台与企业微信真机问答截图如下；29.2 秒真实操作录屏已附上，详见
 [`docs/screenshots/README.md`](docs/screenshots/README.md)。企微截图为真实客户端原图。
 
 ### 文档管理
@@ -237,3 +237,5 @@ Web 管理后台与企业微信真机问答截图如下；30 秒以内的操作�
 ![年假天数问答与知识库引用](docs/screenshots/05-wecom-annual-leave.png)
 
 ![隐私问题与知识库未命中问题的拒答](docs/screenshots/06-wecom-boundary-refusal.png)
+
+[查看 29.2 秒真实操作演示视频](docs/screenshots/demo-30s.mp4)
