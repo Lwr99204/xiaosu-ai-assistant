@@ -47,7 +47,9 @@ def make_record(
     )
 
 
-def make_document(doc_id: str, *, version: int = 1, updated_at: str = "2026-11-24T00:00:00+00:00") -> DocumentRecord:
+def make_document(
+    doc_id: str, *, version: int = 1, updated_at: str = "2026-11-24T00:00:00+00:00"
+) -> DocumentRecord:
     return DocumentRecord(
         doc_id=doc_id,
         filename=doc_id,

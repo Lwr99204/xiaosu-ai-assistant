@@ -16,7 +16,7 @@ from app.agent.tool_registry import DEFAULT_TOOL_TIMEOUT_S, ToolRegistry, ToolSp
 from app.config import Settings
 from app.mock_api.repository import get_store
 from app.tools import calculator, clock, internal_api, knowledge
-from app.tools.knowledge import KnowledgeSearchFn
+from app.tools.knowledge import MAX_KNOWLEDGE_HITS, KnowledgeSearchFn
 
 # 无需任何注入的工具。新增通用工具就是「写一个文件 + 在这里加一行」。
 ALL_SPECS: tuple[ToolSpec, ...] = (calculator.SPEC, clock.SPEC)
@@ -36,7 +36,10 @@ def build_all_specs(
     return [
         *ALL_SPECS,
         *internal_api.build_specs(store),
-        knowledge.build_spec(knowledge_search, top_k=settings.retrieval_top_k),
+        knowledge.build_spec(
+            knowledge_search,
+            top_k=min(settings.retrieval_top_k, MAX_KNOWLEDGE_HITS),
+        ),
     ]
 
 

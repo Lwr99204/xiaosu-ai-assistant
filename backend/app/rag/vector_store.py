@@ -2,7 +2,7 @@
 
 设计取舍：
 - 单 collection，显式声明 hnsw:space=cosine。Chroma 默认是 L2，分数口径会与检索层
-  score = 1 - distance 不一致，阈值 0.55 也就失去意义。
+  score = 1 - distance 不一致，标定阈值 0.63 也就失去意义。
 - 元数据只放定位字段，正文放在 documents 里，命中后直接还原 Chunk，不必回表读文件。
 - Chroma 客户端是同步 API，所有调用统一经 asyncio.to_thread，避免阻塞事件循环。
 - page 为 None 时不写该键，Chroma 元数据不接受 None 值。

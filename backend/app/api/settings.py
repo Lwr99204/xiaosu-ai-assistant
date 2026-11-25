@@ -24,7 +24,9 @@ _KNOWN_MODELS = (
 
 
 def _available(provider: str) -> list[ModelInfo]:
-    return [ModelInfo(id=model_id, name=name, provider=provider) for model_id, name in _KNOWN_MODELS]
+    return [
+        ModelInfo(id=model_id, name=name, provider=provider) for model_id, name in _KNOWN_MODELS
+    ]
 
 
 @router.get("/model", response_model=ModelSettings)

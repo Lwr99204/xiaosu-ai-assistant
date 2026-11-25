@@ -15,7 +15,11 @@ from app.services.document_service import DocumentService
 def _documents(directory: Path) -> list[Path]:
     supported = {f".{ext}" for ext in SUPPORTED_EXTS}
     return sorted(
-        (path for path in directory.iterdir() if path.is_file() and path.suffix.lower() in supported),
+        (
+            path
+            for path in directory.iterdir()
+            if path.is_file() and path.suffix.lower() in supported
+        ),
         key=lambda path: path.name,
     )
 

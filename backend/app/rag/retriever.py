@@ -5,7 +5,7 @@
 1. 先按 top_k * oversample 过采样再做限额。直接取 top_k 再限额，会让命中数少于
    top_k，白白丢掉其他文档里相关的内容。
 2. score = 1 - 余弦距离。ChromaStore 已显式声明 hnsw:space=cosine，距离落在 [0, 2]，
-   换算后 score 落在 [-1, 1]，与 retrieval_min_score=0.55 同一口径。
+   换算后 score 落在 [-1, 1]，与标定后的 retrieval_min_score=0.63 同一口径。
 3. 阈值过滤放在限额之后。限额解决的是「别让单篇长文刷屏」，阈值解决的是「压根不相关」，
    顺序颠倒会让不相关的块先占掉限额名额。
 4. 相对间隔判据（TDD R16③）：top1 与命中均分咬得太近，说明这一堆内容在向量空间里
@@ -36,10 +36,13 @@ DEFAULT_OVERSAMPLE = 2
 DEFAULT_MAX_PER_DOC = 3
 #: top1 与命中均分的最小间隔，低于它判定检索不可靠。
 DEFAULT_MIN_SPREAD = 0.01
+# Chroma scores can move by a few ulps between repeated queries; do not reject a
+# result that lands within a tiny rounding margin of the calibrated boundary.
+SPREAD_EPSILON = 1e-4
 #: 喂给模型的摘要长度。比引用展示用的 200 字更长，年假三档天数这类细节才不会被截掉。
 DEFAULT_TOOL_SNIPPET_CHARS = 300
 DEFAULT_TOP_K = 8
-DEFAULT_MIN_SCORE = 0.55
+DEFAULT_MIN_SCORE = 0.63
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,7 +111,7 @@ def _judge(hits: tuple[Hit, ...], *, min_spread: float) -> RetrievalResult:
         return RetrievalResult(hits=hits, reliable=True, top_score=top, spread=0.0)
     mean = sum(hit.score for hit in hits) / len(hits)
     spread = top - mean
-    reliable = spread >= min_spread
+    reliable = spread + SPREAD_EPSILON >= min_spread
     return RetrievalResult(
         hits=hits,
         reliable=reliable,
@@ -195,4 +198,5 @@ def build_retriever(
         top_k=settings.retrieval_top_k,
         min_score=settings.retrieval_min_score,
         min_spread=settings.retrieval_min_spread,
+        snippet_chars=settings.chunk_max_chars,
     )

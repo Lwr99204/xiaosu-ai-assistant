@@ -68,10 +68,7 @@ async def main() -> None:
     lower = max(unrelated)
     upper = min(related)
     suggested = (lower + upper) / 2
-    print(
-        f"related_min={upper:.4f} unrelated_max={lower:.4f} "
-        f"suggested_threshold={suggested:.4f}"
-    )
+    print(f"related_min={upper:.4f} unrelated_max={lower:.4f} suggested_threshold={suggested:.4f}")
     if lower >= upper:
         print("warning: 正负样本分布重叠，需要扩充样本或调整分块")
 

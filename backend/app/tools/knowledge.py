@@ -5,9 +5,8 @@
 rag.retriever 包装成这里约定的形状。这样 M2 阶段向量库还不存在时，Agent 的工具循环
 也能完整跑通并被测试；M4 接上真检索器时本文件一行都不用改。
 
-输出的【参考资料】块由本模块统一编号，system prompt 回答规则第 2 条承诺「编号对应
-下方【参考资料】中的序号」，编号规则必须与这里一致，否则引用后校验会误判模型编造引用。
-hits 与 references 用同一份编号结果生成，避免两处各编一次号导致错位。
+参考资料与引用元数据分开序列化：模型读取 references 中的完整片段，编排器读取 hits
+中的定位字段。避免同一长片段在工具 JSON 中重复两遍而被 4k 输出上限截断。
 """
 
 from __future__ import annotations
@@ -24,6 +23,8 @@ from app.agent.tool_registry import ToolSpec
 KnowledgeSearchFn = Callable[[str, int], Awaitable[Sequence[Mapping[str, Any]]]]
 
 _SOURCE_KEYS = ("filename", "heading_path")
+MAX_KNOWLEDGE_HITS = 4
+_TOOL_SNIPPET_CHARS = 600
 
 
 class KnowledgeArgs(BaseModel):
@@ -38,25 +39,46 @@ class KnowledgeArgs(BaseModel):
 
 DESCRIPTION = (
     "检索公司知识库。查询公司规章制度、员工手册、入职流程、报销标准等文档类问题时使用。"
-    "返回带 [n] 编号的【参考资料】文本，回答中引用其中内容时必须按该编号标注来源。"
+    "返回 references 数组（含 ref_no/source/content 完整片段）与 hits 定位信息。引用时使用 ref_no 编号。"
 )
 
 
 def number_hits(hits: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """给命中结果按 1 起编号，编号即答案里 [n] 的 n。"""
-    return [{**dict(hit), "ref_no": index} for index, hit in enumerate(hits, start=1)]
+    numbered: list[dict[str, Any]] = []
+    for index, hit in enumerate(hits[:MAX_KNOWLEDGE_HITS], start=1):
+        compact = {
+            key: value
+            for key, value in dict(hit).items()
+            if key
+            in {
+                "doc_id",
+                "filename",
+                "heading_path",
+                "snippet",
+                "char_start",
+                "char_end",
+                "page",
+                "score",
+            }
+        }
+        compact["snippet"] = str(compact.get("snippet", ""))[:_TOOL_SNIPPET_CHARS]
+        compact["ref_no"] = index
+        numbered.append(compact)
+    return numbered
 
 
-def format_references(hits: Sequence[Mapping[str, Any]]) -> str:
-    """把已编号的命中拼成 TDD 7.2 约定的【参考资料】块。"""
-    if not hits:
-        return "【参考资料】" + chr(10) + "没有检索到相关内容。"
-    lines = ["【参考资料】"]
-    for hit in hits:
-        source = " › ".join(str(hit[key]) for key in _SOURCE_KEYS if hit.get(key))
-        lines.append(f"[{hit.get('ref_no')}] 来源：{source or '未知来源'}")
-        lines.append(f"    {hit.get('snippet', '')}")
-    return chr(10).join(lines)
+def format_references(hits: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """生成模型可读的引用视图，正文只在 references 中保存一次。"""
+    return [
+        {
+            "ref_no": hit.get("ref_no"),
+            "source": " › ".join(str(hit[key]) for key in _SOURCE_KEYS if hit.get(key))
+            or "未知来源",
+            "content": hit.get("snippet", ""),
+        }
+        for hit in hits
+    ]
 
 
 def _unavailable_payload(query: str) -> str:
@@ -69,7 +91,7 @@ def _unavailable_payload(query: str) -> str:
         {
             "ok": False,
             "query": query,
-            "references": "",
+            "references": [],
             "hits": [],
             "error": "知识库当前不可用：尚未建立文档索引。请勿据此断言文档里没有该内容。",
         },
@@ -85,14 +107,19 @@ def build_spec(search: KnowledgeSearchFn | None = None, *, top_k: int = 8) -> To
             return _unavailable_payload(query)
         found = await search(query, top_k)
         hits = number_hits(found)
+        reference_view = format_references(hits)
+        citation_metadata = [
+            {key: value for key, value in hit.items() if key != "snippet"} for hit in hits
+        ]
         return json.dumps(
             {
                 "ok": True,
                 "query": query,
-                "references": format_references(hits),
-                "hits": hits,
+                "references": reference_view,
+                "hits": citation_metadata,
             },
             ensure_ascii=False,
+            separators=(",", ":"),
         )
 
     return ToolSpec(

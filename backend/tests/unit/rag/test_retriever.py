@@ -85,6 +85,17 @@ async def test_search_marks_close_scores_as_unreliable() -> None:
 
 
 @pytest.mark.asyncio
+async def test_search_accepts_spread_within_rounding_epsilon() -> None:
+    """实测 spread 仅差 0.000005 时应容忍向量分数浮点抖动。"""
+    store = _Store([_hit("a.md", 0, 0.80), _hit("b.md", 0, 0.78001)])
+    result = await Retriever(embedder=_Embedder(), store=store, min_spread=0.01).search(
+        "年假制度", top_k=2
+    )
+    assert result.spread == pytest.approx(0.009995)
+    assert result.reliable is True
+
+
+@pytest.mark.asyncio
 async def test_search_returns_no_hit_below_absolute_threshold() -> None:
     result = await Retriever(
         embedder=_Embedder(),

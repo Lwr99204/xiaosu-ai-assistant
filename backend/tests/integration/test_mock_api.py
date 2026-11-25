@@ -30,6 +30,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from app.agent.events import AgentEvent, AgentReply
 from app.api.middleware import REQUEST_ID_HEADER, UNEXPECTED_ERROR_CODE
 from app.config import REPO_ROOT, Settings
 from app.db.engine import init_db
@@ -75,7 +76,7 @@ async def test_health_reports_unwired_components(client: httpx.AsyncClient) -> N
     assert body["status"] == "ok"
     assert body["version"] == APP_VERSION
     # M1 阶段 llm/embed/vector_store/db 尚未接线，属预期状态而非故障
-    assert body["llm"]["status"] == "not_wired"
+    assert body["llm"]["status"] == "ok"
     assert body["embed"]["status"] == "not_wired"
     assert body["vector_store"]["status"] == "not_wired"
     assert body["db"]["status"] == "not_wired"
@@ -133,21 +134,50 @@ async def test_admin_log_list_detail_and_stats(tmp_path: Path) -> None:
         assert stats.json()["total"] == {"count": 1, "tokens": 120, "cost_cny": 0.12}
 
 
-async def test_model_settings_switch_without_exposing_credentials(client: httpx.AsyncClient) -> None:
+async def test_model_settings_switch_without_exposing_credentials(
+    client: httpx.AsyncClient,
+) -> None:
     current = await client.get("/api/settings/model")
     assert current.status_code == 200
     assert current.json()["available"]
     assert "key" not in current.text.lower()
 
-    switched = await client.put(
-        "/api/settings/model", json={"model_id": "deepseek-v4-pro"}
-    )
+    switched = await client.put("/api/settings/model", json={"model_id": "deepseek-v4-pro"})
     assert switched.status_code == 200
     assert switched.json() == {"ok": True, "current": "deepseek-v4-pro"}
     assert (await client.get("/api/settings/model")).json()["current"] == "deepseek-v4-pro"
 
     rejected = await client.put("/api/settings/model", json={"model_id": "unknown-model"})
     assert rejected.status_code == 422
+
+
+async def test_chat_stream_uses_shared_agent_service(tmp_path: Path) -> None:
+    app = create_app(_settings(tmp_path))
+
+    class FakeAgentService:
+        async def ask(self, question, context):
+            assert question == "员工每年有几天年假？"
+            assert context.platform == "web"
+            yield AgentEvent(kind="delta", text="每年 10 天 [1]。")
+            yield AgentEvent(
+                kind="done",
+                reply=AgentReply(answer="每年 10 天 [1]。", status="ok"),
+            )
+
+    app.state.agent_service = FakeAgentService()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as test_client:
+        response = await test_client.post(
+            "/api/chat/stream",
+            json={"question": "员工每年有几天年假？", "session_id": "test-session"},
+        )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert '"type": "delta"' in response.text
+    assert '"type": "done"' in response.text
+    assert "每年 10 天 [1]。" in response.text
 
 
 # ── 员工查询（考题 Q4：员工 001 是哪个部门）───────────────────────

@@ -172,6 +172,83 @@ async def test_q1_knowledge_answer_carries_citations(ask_agent):
     assert list(citations_events[0].citations) == list(reply.citations)
 
 
+async def test_knowledge_citations_survive_large_tool_payload(mock_settings) -> None:
+    """多命中工具输出不能因 4k 截断丢掉结构化 hits 并误拒答。"""
+
+    async def search(_query: str, _top_k: int):
+        return [
+            {
+                "doc_id": f"doc-{index}",
+                "filename": "员工手册.md",
+                "heading_path": "休假制度",
+                "snippet": f"年假规则说明 {index}。" * 30,
+                "char_start": index * 100,
+                "char_end": index * 100 + 200,
+                "page": None,
+                "score": 0.8,
+            }
+            for index in range(8)
+        ]
+
+    registry = build_tool_registry(mock_settings, knowledge_search=search)
+    llm = MockLLMProvider(
+        [
+            tool_reply(("search_knowledge_base", {"query": "年假天数"})),
+            text_reply("员工可按制度享受年假 [4]。"),
+        ]
+    )
+    orchestrator = build_orchestrator(mock_settings, llm, registry)
+    events = [event async for event in orchestrator.ask("员工每年有几天年假？")]
+    reply = next(event.reply for event in events if event.kind == "done")
+
+    assert reply is not None
+    assert reply.status == "ok"
+    assert len(reply.citations) == 1
+    assert reply.citations[0]["ref_no"] == 4
+    assert reply.citations[0]["doc_id"] == "doc-3"
+    assert "年假规则说明 3" in reply.citations[0]["snippet"]
+
+
+async def test_knowledge_search_is_removed_from_tools_after_two_calls(mock_settings) -> None:
+    """多次检索后停止提供检索工具，避免同一问题反复搜索耗尽轮次。"""
+    calls = 0
+
+    async def search(_query: str, _top_k: int):
+        nonlocal calls
+        calls += 1
+        return [
+            {
+                "doc_id": "employee-handbook",
+                "filename": "员工手册.md",
+                "heading_path": "休假制度 › 年假",
+                "snippet": "连续工作满一年不满五年的，每年享有十天年假。",
+                "char_start": 100,
+                "char_end": 140,
+                "page": None,
+                "score": 0.8,
+            }
+        ]
+
+    registry = build_tool_registry(mock_settings, knowledge_search=search)
+    llm = MockLLMProvider(
+        [
+            tool_reply(
+                ("search_knowledge_base", {"query": "年假"}),
+                ("search_knowledge_base", {"query": "年假天数"}),
+            ),
+            text_reply("连续工作满一年不满五年，每年有十天年假 [1]。"),
+        ]
+    )
+    orchestrator = build_orchestrator(mock_settings, llm, registry)
+    events = [event async for event in orchestrator.ask("员工年假有几天？")]
+    reply = next(event.reply for event in events if event.kind == "done")
+
+    assert reply is not None and reply.status == "ok"
+    assert calls == 2
+    remaining_tool_names = {item["function"]["name"] for item in llm.calls[1]["tools"]}
+    assert "search_knowledge_base" not in remaining_tool_names
+
+
 async def test_knowledge_answer_without_citation_is_retracted(ask_agent):
     """L3：用了知识库却不标 [n] → 撤回答案换成 NOT_FOUND_REPLY。"""
     llm = MockLLMProvider(

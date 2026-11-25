@@ -41,7 +41,7 @@ from app.agent.refusal import (
     pick_citations,
     threshold_refusal,
 )
-from app.agent.tool_registry import ToolRegistry
+from app.agent.tool_registry import ToolRegistry, ToolResult
 from app.config import Settings
 from app.core.timing import Timer, start_timer
 from app.llm.base import ChatMessage, ChatProvider, TokenUsage, ToolCall
@@ -123,7 +123,22 @@ def _knowledge_payload(output: str) -> tuple[bool, list[Mapping[str, Any]]]:
     if not isinstance(payload, Mapping):
         return False, []
     hits = payload.get("hits")
-    return bool(payload.get("ok")), (list(hits) if isinstance(hits, list) else [])
+    references = payload.get("references")
+    snippets = (
+        {
+            item.get("ref_no"): item.get("content", "")
+            for item in references
+            if isinstance(item, Mapping)
+        }
+        if isinstance(references, list)
+        else {}
+    )
+    enriched = []
+    if isinstance(hits, list):
+        for hit in hits:
+            if isinstance(hit, Mapping):
+                enriched.append({**hit, "snippet": snippets.get(hit.get("ref_no"), "")})
+    return bool(payload.get("ok")), enriched
 
 
 def _query_of(arguments: str) -> str:
@@ -220,6 +235,7 @@ class Orchestrator:
         tool_records: list[ToolCallRecord] = []
         hits: list[Mapping[str, Any]] = []
         knowledge_used = False
+        knowledge_calls = 0
         usage = TokenUsage(model=self._llm.model)
 
         # L1：隐私问题不进模型。规则拦截是唯一能保证 100% 不泄露的手段，
@@ -251,9 +267,18 @@ class Orchestrator:
             round_usage: TokenUsage | None = None
 
             try:
+                available_tools = self._registry.to_openai_tools()
+                if knowledge_calls >= 2:
+                    # Keep model-driven routing, but stop offering another retrieval
+                    # after two searches so repeated broad queries cannot burn rounds.
+                    available_tools = [
+                        item
+                        for item in available_tools
+                        if item["function"]["name"] != KNOWLEDGE_TOOL_NAME
+                    ]
                 stream = self._llm.stream(
                     messages,
-                    tools=self._registry.to_openai_tools(),
+                    tools=available_tools,
                     temperature=self._temperature,
                 )
                 async for chunk in stream:
@@ -314,7 +339,26 @@ class Orchestrator:
                 ChatMessage(role="assistant", content=text or None, tool_calls=tool_calls)
             )
             for call in tool_calls:
-                result = await self._registry.invoke(call.name, call.arguments)
+                if call.name == KNOWLEDGE_TOOL_NAME and knowledge_calls >= 2:
+                    # A model can fan out repeated searches for one question. Keep a
+                    # hard per-request budget so retrieval cannot consume all rounds.
+                    result = ToolResult(
+                        ok=False,
+                        output=json.dumps(
+                            {
+                                "ok": False,
+                                "error": "本轮知识库查询次数已达上限，请基于已有资料回答。",
+                            },
+                            ensure_ascii=False,
+                        ),
+                        tool_name=call.name,
+                        latency_ms=0.0,
+                        error="knowledge query budget exceeded",
+                    )
+                else:
+                    if call.name == KNOWLEDGE_TOOL_NAME:
+                        knowledge_calls += 1
+                    result = await self._registry.invoke(call.name, call.arguments)
                 record = ToolCallRecord(
                     round=round_index,
                     tool_name=call.name,

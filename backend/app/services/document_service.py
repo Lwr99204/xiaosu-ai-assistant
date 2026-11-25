@@ -110,7 +110,9 @@ class DocumentService:
         action = "replaced" if previous else "created"
         return UploadDecision(safe_name, doc_id, action, "pending")
 
-    def list_documents(self, *, offset: int = 0, limit: int = 50) -> tuple[list[DocumentRecord], int]:
+    def list_documents(
+        self, *, offset: int = 0, limit: int = 50
+    ) -> tuple[list[DocumentRecord], int]:
         return self._repo.list_paged(offset=offset, limit=limit)
 
     def get_document(self, doc_id: str) -> DocumentRecord:

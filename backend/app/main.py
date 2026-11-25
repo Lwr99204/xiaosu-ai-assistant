@@ -20,6 +20,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.agent.orchestrator import build_orchestrator
+from app.api.chat import router as chat_router
 from app.api.documents import router as document_router
 from app.api.logs import router as log_router
 from app.api.middleware import RequestContextMiddleware, install_exception_handlers
@@ -125,7 +126,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.rag_detail = "向量服务或索引不可用，请检查 127.0.0.1:8001 与 Chroma"
     app.state.rag_pipeline = rag_pipeline
     document_service = (
-        DocumentService(settings=settings, pipeline=rag_pipeline) if rag_pipeline is not None else None
+        DocumentService(settings=settings, pipeline=rag_pipeline)
+        if rag_pipeline is not None
+        else None
     )
     app.state.document_service = document_service
     app.state.agent_service = build_agent_service(settings, rag_pipeline)
@@ -153,15 +156,28 @@ def build_health(
 ) -> HealthResponse:
     """组装健康检查响应。
 
-    M3 起 db 与 im.wecom 是真实探测（SQLite 已建表、长连接心跳时间）。llm /
-    embed / vector_store 仍回 not_wired：它们要到 M4 接本地向量服务与真实模型
-    探测。响应字段保持不变，前端与评审脚本不用改。
+    LLM 状态只根据本地配置判断，不发起实时外呼；RAG 与数据库状态来自 lifespan
+    初始化结果，企业微信状态来自当前 adapter。响应字段保持不变。
     """
     wecom = adapter.health() if adapter is not None else None
+    if settings.llm_provider == "mock":
+        llm = HealthComponent(status="ok", detail="mock provider")
+    elif (
+        settings.llm_provider == "openai_compat"
+        and settings.llm_base_url.strip()
+        and settings.llm_model.strip()
+        and settings.llm_api_key.get_secret_value().strip()
+    ):
+        llm = HealthComponent(
+            status="ok",
+            detail=f"provider={settings.llm_provider}, model={settings.llm_model}",
+        )
+    else:
+        llm = HealthComponent(status="degraded", detail="LLM 配置不完整")
     return HealthResponse(
         status="ok",
         version=APP_VERSION,
-        llm=HealthComponent(status="not_wired", detail=_NOT_WIRED),
+        llm=llm,
         embed=HealthComponent(
             status="not_wired" if rag_ready is None else ("ok" if rag_ready else "down"),
             detail=_NOT_WIRED if rag_ready is None else rag_detail,
@@ -214,6 +230,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(RequestContextMiddleware)
     install_exception_handlers(app)
     app.include_router(mock_router)
+    app.include_router(chat_router)
     app.include_router(document_router)
     app.include_router(log_router)
     app.include_router(settings_router)

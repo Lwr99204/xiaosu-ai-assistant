@@ -47,7 +47,9 @@ class _Embeddings:
         if self.fail_once:
             self.fail_once = False
             raise ConnectionError("temporary")
-        data = [SimpleNamespace(index=i, embedding=[float(i)] * self.dim) for i in range(len(input))]
+        data = [
+            SimpleNamespace(index=i, embedding=[float(i)] * self.dim) for i in range(len(input))
+        ]
         return SimpleNamespace(data=data)
 
 

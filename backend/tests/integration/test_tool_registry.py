@@ -15,6 +15,7 @@ import pytest
 from pydantic import BaseModel, Field
 
 from app.agent.tool_registry import ToolRegistry, ToolSpec
+from app.tools.knowledge import build_spec
 
 pytestmark = pytest.mark.allow_hosts("127.0.0.1")
 
@@ -155,3 +156,33 @@ async def test_same_name_registration_overrides():
     registry.register(ToolSpec(name="echo", description="v2", parameters=_EchoArgs, handler=_echo2))
     result = await registry.invoke("echo", '{"value": "a"}')
     assert json.loads(result.output)["echo"] == "v2:a"
+
+
+async def test_knowledge_output_keeps_hits_parseable_under_clip_limit() -> None:
+    async def search(_query: str, _top_k: int):
+        return [
+            {
+                "doc_id": f"doc-{index}",
+                "filename": "员工手册.md",
+                "heading_path": "休假制度",
+                "snippet": "年假规则与申请材料。" * 100,
+                "char_start": index * 100,
+                "char_end": index * 100 + 200,
+                "page": None,
+                "score": 0.8,
+            }
+            for index in range(8)
+        ]
+
+    registry = ToolRegistry()
+    registry.register(build_spec(search, top_k=8))
+    result = await registry.invoke("search_knowledge_base", '{"query":"年假"}')
+
+    assert result.ok is True
+    assert len(result.output) <= 4000
+    payload = json.loads(result.output)
+    assert len(payload["hits"]) == 4
+    assert payload["hits"][0]["ref_no"] == 1
+    assert "ref_no" in payload["references"][0]
+    assert len(payload["references"][0]["content"]) == 600
+    assert "snippet" not in payload["hits"][0]

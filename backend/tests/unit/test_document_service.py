@@ -124,7 +124,9 @@ async def test_rejects_unsupported_empty_and_oversized_files(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_failed_document_can_retry_same_content_and_filename_is_sanitized(tmp_path: Path) -> None:
+async def test_failed_document_can_retry_same_content_and_filename_is_sanitized(
+    tmp_path: Path,
+) -> None:
     pipeline = _Pipeline()
     pipeline.fail = True
     service = DocumentService(settings=_settings(tmp_path), pipeline=pipeline)  # type: ignore[arg-type]

@@ -128,10 +128,7 @@ class DocumentRepo:
 
     def mark_failed(self, doc_id: str, error_message: str) -> bool:
         timestamp = now_iso()
-        sql = (
-            "UPDATE documents SET status='failed', error_message=?, updated_at=? "
-            "WHERE doc_id=?"
-        )
+        sql = "UPDATE documents SET status='failed', error_message=?, updated_at=? WHERE doc_id=?"
         with closing(connect(self._db_path)) as conn, conn:
             return conn.execute(sql, (error_message, timestamp, doc_id)).rowcount == 1
 
@@ -268,9 +265,7 @@ class ConversationRepo:
             params.append(end)
         if has_tool_call is not None:
             exists = "EXISTS" if has_tool_call else "NOT EXISTS"
-            clauses.append(
-                f"{exists} (SELECT 1 FROM tool_calls t WHERE t.conversation_id = c.id)"
-            )
+            clauses.append(f"{exists} (SELECT 1 FROM tool_calls t WHERE t.conversation_id = c.id)")
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         with closing(connect(self._db_path)) as conn:
             total = int(
@@ -291,7 +286,9 @@ class ConversationRepo:
         )
         with closing(connect(self._db_path)) as conn:
             row = conn.execute(sql, params).fetchone()
-        return UsageStats(count=int(row["count"]), tokens=int(row["tokens"]), cost_cny=float(row["cost_cny"]))
+        return UsageStats(
+            count=int(row["count"]), tokens=int(row["tokens"]), cost_cny=float(row["cost_cny"])
+        )
 
     @staticmethod
     def _record_from_row(row: object) -> ConversationRecord:
