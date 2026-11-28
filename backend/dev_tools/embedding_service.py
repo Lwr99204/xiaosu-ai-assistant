@@ -4,12 +4,10 @@
 ────────────────────────────────────────────────────────────────────────
 出处与副本声明（TDD §1.4 / R17 / ADR-15）
 ────────────────────────────────────────────────────────────────────────
-本文件是本机已有服务 ``E:\\Models\\bge-m3-service\\app.py`` 的**入库副本**，
-目的是让评审者能复现 RAG 的向量化环节（原脚本不在仓库内，无法复现）。
+本文件最初来自本机已有服务 ``E:\\Models\\bge-m3-service\\app.py``，现已补齐
+跨机器启动校验与 ONNX 回退，目的是让评审者能复现 RAG 的向量化环节。
 
-与原文件的**唯一差异**：``MODEL_DIR`` 与监听端口改为可用环境变量覆盖
-（``BGE_MODEL_DIR`` / ``BGE_PORT``），默认值与原文件完全一致。
-除此之外逻辑逐行保持原样，包括：
+模型目录与监听端口由环境变量（``BGE_MODEL_DIR`` / ``BGE_PORT``）提供，包括：
   · ``normalize_embeddings=True``（实测 L2norm=1 → 余弦相似度 == 点积）
   · ``usage.prompt_tokens`` 用 ``len(str(t))`` 冒充 token —— 这是原服务行为，
     **不是真 BPE token**。故 backend 侧 embedding 成本一律记 0 元，
@@ -22,6 +20,7 @@
 import logging
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, List, Union
 
 import numpy as np
@@ -37,7 +36,7 @@ except ModuleNotFoundError:  # 临时开发机可用仓库模型自带的 ONNX �
     torch = None
     SentenceTransformer = None
 
-MODEL_DIR = os.environ.get("BGE_MODEL_DIR", r"E:\Models\bge-m3")
+MODEL_DIR = os.environ.get("BGE_MODEL_DIR", "").strip()
 MODEL_NAME = "bge-m3"
 PORT = int(os.environ.get("BGE_PORT", "8001"))
 
@@ -45,6 +44,27 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("bge-m3-service")
 
 _model: Any = None
+_runtime = "unloaded"
+
+
+def validate_model_dir(model_dir: str) -> Path:
+    """拒绝机器相关默认路径，并在加载大模型前给出可操作错误。"""
+    if not model_dir:
+        raise RuntimeError("缺少 BGE_MODEL_DIR，请在 .env 中填写 BGE-M3 模型目录")
+    path = Path(model_dir).expanduser().resolve()
+    if not path.is_dir():
+        raise RuntimeError(f"BGE_MODEL_DIR 不存在或不是目录：{path}")
+    if not (path / "config.json").is_file():
+        raise RuntimeError(f"BGE_MODEL_DIR 缺少 config.json：{path}")
+    return path
+
+
+def model_dimension(model: Any) -> int:
+    """兼容新旧 sentence-transformers 与轻量 ONNX 包装器。"""
+    getter = getattr(model, "get_embedding_dimension", None)
+    if getter is None:
+        getter = model.get_sentence_embedding_dimension
+    return int(getter())
 
 
 class OnnxSentenceTransformer:
@@ -96,17 +116,27 @@ class EmbeddingResponse(BaseModel):
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global _model
+    global _model, _runtime
+    model_dir = validate_model_dir(MODEL_DIR)
     if SentenceTransformer is not None and torch is not None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        logger.info("loading model from %s on device=%s", MODEL_DIR, device)
-        _model = SentenceTransformer(MODEL_DIR, device=device)
+        logger.info("loading model from %s on device=%s", model_dir, device)
+        _model = SentenceTransformer(str(model_dir), device=device)
+        _runtime = f"sentence-transformers/{device}"
     else:
-        logger.info("torch unavailable; loading ONNX model from %s on CPU", MODEL_DIR)
-        _model = OnnxSentenceTransformer(MODEL_DIR)
-    logger.info("model loaded. dim=%s", _model.get_sentence_embedding_dimension())
+        onnx_model = model_dir / "onnx" / "model.onnx"
+        if not onnx_model.is_file():
+            raise RuntimeError(
+                "当前 Python 未安装 sentence-transformers，且模型目录没有 onnx/model.onnx；"
+                "请设置 BGE_PYTHON 指向 Embedding 专用虚拟环境"
+            )
+        logger.info("torch unavailable; loading ONNX model from %s on CPU", model_dir)
+        _model = OnnxSentenceTransformer(str(model_dir))
+        _runtime = "onnxruntime/cpu"
+    logger.info("model loaded. dim=%s", model_dimension(_model))
     yield
     _model = None
+    _runtime = "unloaded"
 
 
 app = FastAPI(title="bge-m3 Embedding Service", lifespan=lifespan)
@@ -114,7 +144,13 @@ app = FastAPI(title="bge-m3 Embedding Service", lifespan=lifespan)
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "model": MODEL_NAME, "loaded": _model is not None}
+    return {
+        "status": "ok",
+        "model": MODEL_NAME,
+        "loaded": _model is not None,
+        "dimension": model_dimension(_model) if _model is not None else None,
+        "runtime": _runtime,
+    }
 
 
 @app.post("/v1/embeddings")

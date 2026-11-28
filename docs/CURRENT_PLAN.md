@@ -34,8 +34,9 @@
    `ChatFrame.type` 若保留 reasoning 帧，联合类型必须包含 `reasoning`。
 7. **文档替换必须可回滚**：先完成新版本解析和向量写入，成功后切换当前版本并删除旧向量；
    新版本失败时旧文档继续可用。
-8. **一键启动必须包含 embedding**：若继续使用本地 BGE-M3，最终 compose/start 脚本必须
-   启动并检查 embedding 服务；不能只启动 backend + frontend 就宣称项目可用。
+8. **✅ 一键启动已包含 embedding**：`start.ps1` / `start.sh` 会校验模型路径与专用
+   Python、自动拉起服务，并检查 `status + model + loaded`；不会只启动 backend + frontend
+   就宣称项目可用。
 9. **SDK 日志必须脱敏**：企业微信 SDK 默认 DEBUG 会打印原始消息与临时 response URL，
    正式运行必须注入安全 logger，禁止原始帧落盘。
 10. **Git 提交自然形成**：一个完整可验证功能一个 commit，目标约 15～25 个有意义提交；

@@ -63,6 +63,40 @@ function Test-Http([string]$url) {
     } catch { return $false }
 }
 
+function Test-EmbeddingHealth([string]$url) {
+    try {
+        $r = Invoke-RestMethod -Uri $url -TimeoutSec 3 -ErrorAction Stop
+        return ($r.status -eq 'ok' -and $r.model -eq 'bge-m3' -and $r.loaded -eq $true)
+    } catch { return $false }
+}
+
+function Test-EmbeddingPython([string]$python, [string]$modelDir) {
+    if ([string]::IsNullOrWhiteSpace($python) -or -not (Test-Path -LiteralPath $python -PathType Leaf)) { return $false }
+    $onnxModel = Join-Path $modelDir 'onnx\model.onnx'
+    if (Test-Path -LiteralPath $onnxModel -PathType Leaf) {
+        & $python -c 'import fastapi, uvicorn, numpy, onnxruntime, tokenizers' 2>$null
+    } else {
+        & $python -c 'import fastapi, uvicorn, numpy, torch, sentence_transformers' 2>$null
+    }
+    return ($LASTEXITCODE -eq 0)
+}
+
+function Resolve-EmbeddingPython([string]$configured, [string]$modelDir) {
+    if (-not [string]::IsNullOrWhiteSpace($configured)) {
+        $candidate = $configured
+        if (-not [IO.Path]::IsPathRooted($candidate)) { $candidate = Join-Path $script:Root $candidate }
+        if (Test-EmbeddingPython $candidate $modelDir) { return (Resolve-Path -LiteralPath $candidate).Path }
+        Fail "BGE_PYTHON 不可用或缺少模型运行依赖：$candidate"
+    }
+    foreach ($candidate in @(
+            (Join-Path $script:Root 'backend\.venv-embedding\Scripts\python.exe'),
+            (Join-Path $script:Root 'backend\.venv\Scripts\python.exe'),
+            (Join-Path $script:Root 'backend\venv\Scripts\python.exe'))) {
+        if (Test-EmbeddingPython $candidate $modelDir) { return (Resolve-Path -LiteralPath $candidate).Path }
+    }
+    return $null
+}
+
 function Test-Listening([int]$port) {
     $null -ne (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
         Select-Object -First 1)
@@ -117,6 +151,7 @@ $script:EmbedPort    = Get-EnvPort 'BGE_PORT' 8001
 $script:EmbedHealth  = "http://127.0.0.1:$($script:EmbedPort)/health"
 $script:HealthUrl    = "http://127.0.0.1:$($script:BackendPort)/api/health"
 $script:BgeModelDir  = [Environment]::GetEnvironmentVariable('BGE_MODEL_DIR', 'Process')
+$script:BgePython    = [Environment]::GetEnvironmentVariable('BGE_PYTHON', 'Process')
 
 if ($Stop) { Stop-All; exit 0 }
 
@@ -145,22 +180,29 @@ if (-not $node) { Fail '未找到 node —— 请先安装 Node 22 并确保在 
 
 # ── 步骤 2：embedding 服务自检（M3 起为硬依赖，R17）──────────────────
 Write-Step '2/5 检查本地 embedding 服务 …'
-if (Test-Http $script:EmbedHealth) {
+if (Test-EmbeddingHealth $script:EmbedHealth) {
     Write-Step "  OK $($script:EmbedHealth) 可达"
 } else {
+    if (Test-Listening $script:EmbedPort) {
+        Fail "端口 $($script:EmbedPort) 已被占用，但响应不是可用的 BGE-M3 服务"
+    }
     if ([string]::IsNullOrWhiteSpace($script:BgeModelDir)) { Fail 'Embedding 未运行且未设置 BGE_MODEL_DIR（参见 .env.example）' }
     if (-not (Test-Path -LiteralPath $script:BgeModelDir)) { Fail "BGE_MODEL_DIR 不存在：$($script:BgeModelDir)" }
+    $embedPython = Resolve-EmbeddingPython $script:BgePython $script:BgeModelDir
+    if (-not $embedPython) {
+        Fail '未找到可运行该模型的 Embedding Python。请按 README 创建 backend\.venv-embedding，或设置 BGE_PYTHON'
+    }
     $entry = Join-Path $script:Root 'backend\dev_tools\embedding_service.py'
     if (-not (Test-Path -LiteralPath $entry)) { Fail '未找到 backend\dev_tools\embedding_service.py' }
     Write-Step '  启动本地 BGE-M3（首次加载可能需要约 1 分钟）…'
-    $p = Start-Process -FilePath $py -ArgumentList $entry -WorkingDirectory (Join-Path $script:Root 'backend') `
+    $p = Start-Process -FilePath $embedPython -ArgumentList $entry -WorkingDirectory (Join-Path $script:Root 'backend') `
         -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $script:LogDir 'embedding.log') `
         -RedirectStandardError (Join-Path $script:LogDir 'embedding.err.log')
     Save-Pid 'embedding' $p
     $ready = $false
     for ($i = 1; $i -le 90; $i++) {
-        if (Test-Http $script:EmbedHealth) { $ready = $true; break }
+        if (Test-EmbeddingHealth $script:EmbedHealth) { $ready = $true; break }
         Start-Sleep -Seconds 1
     }
     if (-not $ready) { Fail 'Embedding 启动超时，请查看 logs\embedding.log' }

@@ -108,13 +108,13 @@
 
 **背景**：探测 2 + 3 证明——**手上这把 key 拿不到任何云端 embedding 能力**（`/embeddings` 三种模型名全 404；`/models` 23 个全量中无一 embedding 模型；同 key 打标准 DashScope 返回 401）。RAG 的向量化环节必须另找出路。
 
-**最终方案**：复用本机已有的 **BGE-M3 独立 embedding 服务**（`E:\Models\bge-m3-service`，FastAPI + sentence-transformers + torch，自带 venv，实测 `device=cuda`）。它暴露的正是 **OpenAI 兼容的 `POST /v1/embeddings`**，因此 backend **不需要新增任何重依赖**——直接复用已有的 `openai.AsyncOpenAI` 客户端，只把 `base_url` 指向本地即可。
+**最终方案**：仓库内置 **BGE-M3 独立 embedding 服务代码**，模型路径通过 `BGE_MODEL_DIR` 外置，标准 PyTorch 权重使用独立 `.venv-embedding`（FastAPI + sentence-transformers + torch），可选 ONNX 导出则回退到 onnxruntime。它暴露 **OpenAI 兼容的 `POST /v1/embeddings`**，因此 backend **不需要新增任何重依赖**——直接复用已有的 `openai.AsyncOpenAI` 客户端，只把 `base_url` 指向本地即可。
 
 **实测数据（2026-11-23，服务运行状态下测得）**：
 
 | 项 | 实测值 | 对设计的影响 |
 |---|---|---|
-| `GET /health` | `{"status":"ok","model":"bge-m3","loaded":true}` | 启动自检直接用它，比发一次真实 embed 便宜；`loaded:false` 表示模型还在加载，需重试而非报错 |
+| `GET /health` | `{"status":"ok","model":"bge-m3","loaded":true,"dimension":1024,"runtime":"sentence-transformers/cuda"}` | 启动脚本同时校验 status/model/loaded，避免把占用 8001 的其他 HTTP 服务误判为可用 |
 | 向量维度 | **1024** | `embed_dim = 1024`；Chroma collection 维度按此固定，**换模型必须重建索引**（R8） |
 | L2 范数 | **1.0**（精确） | 向量已归一化 → **余弦相似度 == 点积**。Chroma 显式用 `cosine` 空间，无需二次归一化 |
 | 单条延迟 | 首次 **2.1 s**（含 CUDA 预热）→ 之后毫秒级 | 🔴 首次请求明显慢，需在启动自检时**预热一次**，否则第一个提问的用户会莫名卡顿 |
@@ -138,7 +138,7 @@
 
 | 方案 | 否决理由 |
 |---|---|
-| 仅使用残缺 ONNX 导出 | 旧机器曾只有 `model.onnx_data.incomplete`，当时不可用；本机 `D:\Models\bge-m3` 已有完整 ONNX 外部数据，服务现支持在 torch/sentence-transformers 不可用时自动回退 ONNX |
+| 仅依赖 ONNX 导出 | 并非每份标准 BGE-M3 权重都包含 `onnx/model.onnx`；当前 `E:\models\bge-m3` 是标准 PyTorch 权重。服务只在检测到完整 ONNX 文件时回退，否则明确要求使用独立 sentence-transformers 环境 |
 | 项目内直接装 `sentence-transformers` | 会把 **torch 2 GB+** 拖进 backend 的 `.venv`，与「轻量、安装快」目标冲突。**用独立服务隔离依赖才是更优架构** |
 | `bge-base-zh-v1.5`（`C:\Users\26943\models\`，768 维） | 效果弱于 M3；保留为**降级备选**，但切换需重建索引 |
 | ChromaDB 默认 `all-MiniLM-L6-v2` | 英文模型，中文检索质量差，直接拖累 18 分 |
@@ -146,7 +146,7 @@
 
 > **架构收益**：embedding 服务与 backend 进程解耦后——① backend `.venv` 保持轻量（无 torch）；② embedding **完全离线**，面试现场断网也能演示 RAG；③ 服务崩了不影响 backend 启动，只是索引/检索报错，**故障域清晰**。
 >
-> **代价与对策**：项目因此**依赖一个外部本地服务**，仓库无法自包含 2.2 GB 权重。三条对策：① 把服务代码副本收进 `backend/dev_tools/embedding_service.py`（README 注明来源为本机已有脚本），保证可复现；② README 写清启动方式与端口；③ backend 启动时对 `/health` 自检，不可达则打印**可操作的**错误提示（「请先运行 `python backend/dev_tools/embedding_service.py`」）而非静默失败。
+> **代价与对策**：项目因此**依赖一个外部本地服务**，仓库无法自包含 2.2 GB 权重。四条对策：① 服务代码收进 `backend/dev_tools/embedding_service.py`；② README 给出新电脑创建 `.venv-embedding` 的精确命令；③ `.env` 外置 `BGE_MODEL_DIR` / `BGE_PYTHON`；④ `start.ps1` / `start.sh` 自动选择运行时、拉起服务并校验 `status + model + loaded`，端口被其他服务占用时立即报错。
 >
 > **附带说明**：`modules.json` 声明了 `2_Normalize` 模块而该目录实际不存在——**无害**，因为 sentence-transformers 的 `Normalize.load(input_path)` 实现是 `return Normalize()`，根本不读该路径；且服务端 `encode(normalize_embeddings=True)` 又归一化了一次，双保险。已实测 L2norm=1 确认。
 
@@ -1416,11 +1416,11 @@ services:
 | R10 | ~~**钉钉普通消息不可编辑**，占位后无法「原地更新」为正式答案~~ | ✅ **已消除**（随平台切换） | — | 企业微信智能机器人的 `reply_stream` **原生支持流式回写**，「原地更新」不再是问题（§4.6.3 方案 A）；原「占位 + 追加两条消息」降级为**兜底路径**，打字机效果从 P2 提前到 M9 主线。⚠️ 残留待验证项：`reply_stream` 是否为真·原地刷新，须由 M9 spike 实测确认（§1.5 证据等级）；若实为追加语义则回落方案 B |
 | R11 | 截图、录屏、语料等**资源文件触发 `check_limits.sh` 误报超限** | 中 | 🟠 底线自查假阳性 | 脚本统计范围限定为代码文件（§3 约定 3）；资源统一放 `docs/screenshots/`；该约定写进 README「工程规范」小节，避免评审歧义 |
 | R12 | `scripts/` 已达 **8 文件上限**，后续想加脚本即超限 | 中 | 🟠 底线失分 | 新增脚本前先尝试合并（如 `acceptance_check.sh` 并入 `test.sh --acceptance`）；确需新增则建 `scripts/dev/` 子目录 |
-| **R13** | 🔴 token-plan 端点不提供任何 embedding 模型（`/models` 23 个全量中无一），且该 key 打标准 DashScope 返回 401 | ~~高~~ → ✅ **已消除** | ~~阻塞 M3~~ 已解除 | **改用本机已有的 BGE-M3 独立服务**（`http://127.0.0.1:8001/v1/embeddings`，OpenAI 兼容）。实测：`dim=1024`、`L2norm=1`。服务优先使用 sentence-transformers；临时电脑没有 torch 时用轻量 `onnxruntime` + `tokenizers` 读取现有完整 ONNX 权重，无需下载模型。详见 §1.4 |
+| **R13** | 🔴 token-plan 端点不提供任何 embedding 模型（`/models` 23 个全量中无一），且该 key 打标准 DashScope 返回 401 | ~~高~~ → ✅ **已消除** | ~~阻塞 M3~~ 已解除 | **改用仓库自带服务代码的 BGE-M3 独立服务**（`http://127.0.0.1:8001/v1/embeddings`，OpenAI 兼容）。实测：`dim=1024`、`L2norm=1`。标准权重走独立 sentence-transformers 环境；仅在模型目录包含完整 ONNX 导出时回退 onnxruntime。详见 §1.4 |
 | **R14** | 🔴 **实测确认：`qwen3.8-max` 是推理模型，流式下 `reasoning_content` chunk 先于 `content` 到达** | 中 → 🔴 **切换企业微信后升级为高** | SSE 解析器分离两类 delta，仅 `content` 进答案；`reasoning_content` 映射为 `{type:"reasoning"}` 帧供 Web 折叠展示、IM 忽略。**否则企业微信会输出英文思考过程**。🔴 **升级原因**：IM 侧改用 `reply_stream` 原生流式后是**边生成边推给用户**，思考过程会实时刷在屏幕上，不再像「先聚合再发」那样有事后过滤的机会（§4.6.3 方案 A 的新增风险）。M5 的 `test_reasoning_split.py` 因此成为**阻断级**测试 |
 | **R15** | 🔴 **实测确认：流式模式下 `usage` 恒为 `null`** | 中 | 流式请求默认携带 `stream_options={"include_usage": true}`；M5 增加断言测试「流式路径 `total_tokens > 0`」，防止成本字段**静默落 0** |
 | **R16** | 🔴 **实测发现：完全不相关的中文文本之间余弦基线高达 ~0.48**（BGE 语义空间各向异性），原设计 `retrieval_min_score=0.35` **低于噪声地板，拒答 L1 层形同虚设** | **高（已实测证实）** | 🟠 18 分 + FR-2-08/09 | ① 4 份真实语料标定：相关最低 0.6888、不相关最高 0.5741、建议中点 0.6314，定稿 **min_score=0.63**；② `calibrate_threshold.py` 可重复回归；③ 相对间隔实测定稿 **min_spread=0.01**；④ score 使用可解释的 `1 - cosine_distance`；⑤ M10 Evals 持续回归。详见 §4.4.4 |
-| **R17** | 🟠 **项目依赖一个外部本地服务**（bge-m3 @ `:8001`），仓库无法自包含 2.2 GB 权重；换机器 / 现场演示若忘记启动则检索全挂 | 中 | 🟠 演示失败 | ① 服务代码副本收进 `backend/dev_tools/embedding_service.py`；② 临时电脑设置 `BGE_MODEL_DIR=D:\Models\bge-m3` 后启动，复用现有权重、无需下载；③ sentence-transformers 不可用时自动回退 ONNX；④ backend `/health` 报告 embedding/vector 状态；⑤ 最终一键启动必须包含并检查该服务 |
+| **R17** | 🟠 **项目依赖一个外部本地服务**（bge-m3 @ `:8001`），仓库无法自包含 2.2 GB 权重；换机器 / 现场演示若忘记启动则检索全挂 | 中 → 低（已缓解） | 🟠 演示失败 | ① 服务代码收进 `backend/dev_tools/embedding_service.py`；② `BGE_MODEL_DIR` / `BGE_PYTHON` 外置；③ 独立 `.venv-embedding` 安装命令已文档化；④ backend `/health` 报告 embedding/vector 状态；⑤ `start.ps1` / `start.sh` 已自动启动并严格检查服务，错误路径、缺依赖和端口冲突均给出明确提示 |
 | **R18** | 🟠 **IM 依赖社区 SDK 而非官方 SDK**：`wecom-aibot-sdk-python` 为个人维护（MIT、已上 PyPI），腾讯未提供官方 Python SDK。存在协议漂移、停止维护、上游网关变更导致连不上的风险 | 中 | 🟠 M9（15 分 + 淘汰项） | ① **`IMAdapter` Protocol 隔离**——SDK 只在 `app/im/wecom.py` 一个文件里出现，替换成本局限于单文件（这正是 ADR-07 平级抽象的红利）；② MIT 协议 → 必要时可**vendor 源码进仓库**（`backend/vendor/`，注明来源与 commit），彻底摆脱上游可用性；③ `uv.lock` 锁版本，`--frozen` 安装，防上游悄悄改坏；④ M9 第一步先做**连通性 spike**，失败则立刻回退「自建应用回调 + 内网穿透」或 MockAdapter 降级演示；⑤ ⚠️ 已排除**内容农场仓库** `aibot-python-sdk`（README 仅 18 字节、`language:null`、无 license、topics 混入 `whatsapp-automation`）——**选依赖时必须查 star / license / README 实质内容 / 最近 push，不能只看描述**（此条已列入 AI_USAGE 素材） |
 
 

@@ -30,9 +30,8 @@
 
 ### 出处与模型权重
 
-- **代码出处**：本机已有脚本 `E:\Models\bge-m3-service\app.py` 的入库副本。
-  唯一差异是 `MODEL_DIR` / 端口改为可用环境变量覆盖（`BGE_MODEL_DIR` / `BGE_PORT`），
-  默认值与原文件一致。详见该文件头部声明。
+- **代码出处**：最初来自本机已有脚本 `E:\Models\bge-m3-service\app.py`，仓库版本已补齐
+  跨机器配置校验、运行时标识与 ONNX 回退。详见该文件头部声明。
 - **模型权重**：`BAAI/bge-m3`，约 **2.2 GB，不入库**（`.gitignore` 已排除
   `*.bin` / `*.safetensors` / `*.onnx`）。获取方式二选一：
   ```bash
@@ -42,15 +41,39 @@
   export BGE_MODEL_DIR=/path/to/bge-m3
   ```
 
+### 新电脑准备独立运行环境
+
+标准 BGE-M3 权重需要 `sentence-transformers`。为避免把 Torch 混进后端轻量环境，
+在仓库根目录创建独立环境（只需执行一次）：
+
+```bash
+uv venv backend/.venv-embedding --python 3.12
+# Windows
+uv pip install --python backend/.venv-embedding/Scripts/python.exe "sentence-transformers>=3,<6" "fastapi>=0.115" "uvicorn>=0.32"
+# Linux / macOS
+uv pip install --python backend/.venv-embedding/bin/python "sentence-transformers>=3,<6" "fastapi>=0.115" "uvicorn>=0.32"
+```
+
+然后在 `.env` 填写目标机器的模型目录。启动脚本默认自动探测上述独立环境；
+若使用其他现成环境，则设置 `BGE_PYTHON` 为其 Python 可执行文件。
+
+```dotenv
+BGE_MODEL_DIR=E:/Models/bge-m3
+BGE_PYTHON=backend/.venv-embedding/Scripts/python.exe
+```
+
 ### 启动与自检
 
 ```bash
-# 需要 torch / sentence-transformers / fastapi / uvicorn（本服务自带 venv，
-# 不要装进 backend/.venv）
-python backend/dev_tools/embedding_service.py          # 默认 127.0.0.1:8001
+# 平时直接使用一键启动；它会检查模型、运行时和健康响应
+.\scripts\start.ps1 -NoPause                           # Windows
+bash scripts/start.sh                                  # Linux / macOS
+
+# 单独调试 Embedding 时，先确保 BGE_MODEL_DIR 已导出
+backend/.venv-embedding/Scripts/python.exe backend/dev_tools/embedding_service.py
 
 curl -s http://127.0.0.1:8001/health
-# {"status":"ok","model":"bge-m3","loaded":true}
+# {"status":"ok","model":"bge-m3","loaded":true,"dimension":1024,...}
 ```
 
 > ⚠️ `loaded:false` 表示**模型仍在加载**，等几秒重试即可，**不是故障**。

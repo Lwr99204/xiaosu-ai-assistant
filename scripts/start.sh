@@ -35,6 +35,43 @@ PIDS=()
 log()  { printf '\033[36m[start]\033[0m %s\n' "$*"; }
 fail() { printf '\033[31m[start] ✗ %s\033[0m\n' "$*" >&2; exit 1; }
 
+embedding_healthy() {
+  curl -sf --max-time 3 "$EMBED_HEALTH" 2>/dev/null |
+    grep -Eq '"status"[[:space:]]*:[[:space:]]*"ok"' &&
+  curl -sf --max-time 3 "$EMBED_HEALTH" 2>/dev/null |
+    grep -Eq '"model"[[:space:]]*:[[:space:]]*"bge-m3"' &&
+  curl -sf --max-time 3 "$EMBED_HEALTH" 2>/dev/null |
+    grep -Eq '"loaded"[[:space:]]*:[[:space:]]*true'
+}
+
+embedding_python_works() {
+  local python="$1"
+  [ -x "$python" ] || return 1
+  if [ -f "$BGE_MODEL_DIR/onnx/model.onnx" ]; then
+    "$python" -c 'import fastapi, uvicorn, numpy, onnxruntime, tokenizers' >/dev/null 2>&1
+  else
+    "$python" -c 'import fastapi, uvicorn, numpy, torch, sentence_transformers' >/dev/null 2>&1
+  fi
+}
+
+resolve_embedding_python() {
+  local candidate
+  if [ -n "${BGE_PYTHON:-}" ]; then
+    candidate="$BGE_PYTHON"
+    [[ "$candidate" = /* ]] || candidate="$REPO_ROOT/$candidate"
+    embedding_python_works "$candidate" || fail "BGE_PYTHON 不可用或缺少模型运行依赖：$candidate"
+    printf '%s\n' "$candidate"
+    return
+  fi
+  for candidate in \
+    "$REPO_ROOT/backend/.venv-embedding/bin/python" \
+    "$REPO_ROOT/backend/.venv/bin/python" \
+    "$REPO_ROOT/backend/venv/bin/python"; do
+    if embedding_python_works "$candidate"; then printf '%s\n' "$candidate"; return; fi
+  done
+  return 1
+}
+
 # ── 步骤 5（TDD §11.1）：trap 清理 ────────────────────────────────────
 cleanup() {
   log "正在停止子进程 …"
@@ -58,18 +95,23 @@ mkdir -p "$RUN_DIR" "$LOG_DIR"
 # ── 步骤 2：embedding 服务自检（M3 起为硬依赖，R17）──────────────────
 # 🔴 不可达时打印**可操作的**启动命令，而不是静默失败让用户去猜
 log "2/5 检查本地 embedding 服务 …"
-if curl -sf --max-time 3 "$EMBED_HEALTH" >/dev/null 2>&1; then
+if embedding_healthy; then
   log "  ✅ $EMBED_HEALTH 可达"
 else
+  if (echo >/dev/tcp/127.0.0.1/"$EMBED_PORT") >/dev/null 2>&1; then
+    fail "端口 $EMBED_PORT 已被占用，但响应不是可用的 BGE-M3 服务"
+  fi
   [ -n "${BGE_MODEL_DIR:-}" ] || fail "Embedding 未运行且未设置 BGE_MODEL_DIR（参见 .env.example）"
   [ -d "$BGE_MODEL_DIR" ] || fail "BGE_MODEL_DIR 不存在：$BGE_MODEL_DIR"
+  EMBED_PYTHON="$(resolve_embedding_python)" ||
+    fail "未找到可运行该模型的 Embedding Python。请按 README 创建 backend/.venv-embedding，或设置 BGE_PYTHON"
   log "  启动本地 BGE-M3（首次加载可能需要约 1 分钟）…"
-  ( cd "$REPO_ROOT/backend" && uv run python dev_tools/embedding_service.py >>"$LOG_DIR/embedding.log" 2>&1 ) &
+  ( cd "$REPO_ROOT/backend" && "$EMBED_PYTHON" dev_tools/embedding_service.py >>"$LOG_DIR/embedding.log" 2>&1 ) &
   PIDS+=("$!")
   printf '%s\n' "$!" >"$RUN_DIR/embedding.pid"
   embed_ready=0
   for _ in $(seq 1 90); do
-    if curl -sf --max-time 3 "$EMBED_HEALTH" >/dev/null 2>&1; then embed_ready=1; break; fi
+    if embedding_healthy; then embed_ready=1; break; fi
     sleep 1
   done
   [ "$embed_ready" -eq 1 ] || fail "Embedding 启动超时，请查看 logs/embedding.log"

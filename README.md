@@ -130,13 +130,14 @@ $gitRoot = Split-Path (Split-Path $gitCmd -Parent) -Parent
 .\scripts\start.ps1 -Stop
 ```
 
-**RAG 需要额外的本地 embedding 服务**（M3 起为硬依赖）。启动主栈前先检查
-`http://127.0.0.1:8001/health`；若已健康，不要重复启动该服务。
+**RAG 需要本地 BGE-M3 模型权重**（M3 起为硬依赖）。权重不入库；在新电脑上
+按 [`backend/dev_tools/README.md`](backend/dev_tools/README.md) 创建一次独立运行环境，
+并在 `.env` 填好 `BGE_MODEL_DIR`。之后一键启动会自动检查并拉起 Embedding 服务，
+无需另开终端。
 
 ```bash
-# 另开一个终端
-python backend/dev_tools/embedding_service.py
-curl -s http://127.0.0.1:8001/health   # {"status":"ok","model":"bge-m3","loaded":true}
+curl -s http://127.0.0.1:8001/health
+# {"status":"ok","model":"bge-m3","loaded":true,"dimension":1024,...}
 ```
 
 模型权重（约 2.2 GB）不入库，获取方式见 [`backend/dev_tools/README.md`](backend/dev_tools/README.md)。

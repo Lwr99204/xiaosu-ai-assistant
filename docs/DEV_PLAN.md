@@ -283,12 +283,11 @@ bash scripts/test.sh        # 全绿
 
 **验收动作**
 ```bash
-# ── 前置：另开一个终端，启动本地 embedding 服务（M3 起为硬依赖，见 R17）──
-cd backend
-$env:BGE_MODEL_DIR='D:\Models\bge-m3'
-uv run python dev_tools/embedding_service.py
-curl -s http://127.0.0.1:8001/health              # 期望 {"status":"ok","model":"bge-m3","loaded":true}
-                                                  # loaded:false = 模型仍在加载，等几秒重试，不算故障
+# ── 前置：.env 已填写 BGE_MODEL_DIR；标准权重已准备独立 .venv-embedding（见 R17）──
+# start 脚本会自动拉起并严格检查 embedding，无需另开终端
+.\scripts\start.ps1 -NoPause                      # Windows
+# bash scripts/start.sh                            # Linux / macOS
+curl -s http://127.0.0.1:8001/health              # 期望 loaded=true、dimension=1024
 
 # ── 主体 ──
 cd backend
