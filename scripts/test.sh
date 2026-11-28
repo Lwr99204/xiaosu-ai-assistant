@@ -23,7 +23,14 @@ cd "$REPO_ROOT"
 
 BACKEND_DIR="$REPO_ROOT/backend"
 FRONTEND_DIR="$REPO_ROOT/frontend"
+export UV_CACHE_DIR="$REPO_ROOT/.uv-cache"
 FAILED=()
+
+UV_BIN="$(command -v uv 2>/dev/null || true)"
+if [ -z "$UV_BIN" ] && command -v cygpath >/dev/null 2>&1 && [ -n "${USERPROFILE:-}" ]; then
+  uv_candidate="$(cygpath -u "$USERPROFILE")/.local/bin/uv.exe"
+  [ -x "$uv_candidate" ] && UV_BIN="$uv_candidate"
+fi
 
 step() { printf '\n\033[36m[test] %s\033[0m\n' "$*"; }
 ok()   { printf '\033[32m  ✅ %s\033[0m\n' "$*"; }
@@ -32,14 +39,18 @@ bad()  { printf '\033[31m  ✗ %s\033[0m\n' "$*"; FAILED+=("$1"); }
 # ── 步骤 1/5：ruff check ──────────────────────────────────────────────
 step "1/5 ruff check（静态检查）"
 if [ -f "$BACKEND_DIR/pyproject.toml" ]; then
-  ( cd "$BACKEND_DIR" && uv run ruff check . ) && ok "ruff check" || bad "ruff check"
+  if [ -z "$UV_BIN" ]; then
+    bad "ruff check（未找到 uv）"
+  else
+    ( cd "$BACKEND_DIR" && "$UV_BIN" run ruff check . ) && ok "ruff check" || bad "ruff check"
+  fi
 else
   ok "跳过（backend 未初始化）"
 fi
 
 # ── 步骤 2/5：ruff format --check ─────────────────────────────────────
 step "2/5 ruff format --check（格式检查，不改写文件）"
-if ( cd "$BACKEND_DIR" && uv run ruff format --check . ); then
+if [ -n "$UV_BIN" ] && ( cd "$BACKEND_DIR" && "$UV_BIN" run ruff format --check . ); then
   ok "ruff format --check"
 else
   bad "ruff format --check"
@@ -48,7 +59,11 @@ fi
 # ── 步骤 3/5：pytest ──────────────────────────────────────────────────
 step "3/5 pytest --cov（单元 / 集成 / e2e）"
 if [ -d "$BACKEND_DIR/tests" ] && [ -f "$BACKEND_DIR/pyproject.toml" ]; then
-  if ( cd "$BACKEND_DIR" && uv run pytest tests/ --cov=app/rag --cov=app/agent --cov-report=term-missing ); then
+  if [ -z "$UV_BIN" ]; then
+    bad "pytest（未找到 uv）"
+  elif ( cd "$BACKEND_DIR" && "$UV_BIN" run pytest tests/ \
+    --basetemp=.pytest_cache/script_tmp \
+    --cov=app/rag --cov=app/agent --cov-report=term-missing ); then
     ok "pytest + rag/agent coverage"
   else
     bad "pytest"
@@ -69,7 +84,9 @@ fi
 # ── 步骤 5/5：前端类型检查 ────────────────────────────────────────────
 step "5/5 tsc --noEmit（前端类型检查）"
 if [ -f "$FRONTEND_DIR/package.json" ]; then
-  if pnpm --dir "$FRONTEND_DIR" typecheck; then
+  if [ ! -x "$FRONTEND_DIR/node_modules/.bin/tsc" ]; then
+    bad "前端类型检查（请先安装前端依赖）"
+  elif ( cd "$FRONTEND_DIR" && ./node_modules/.bin/tsc --noEmit ); then
     ok "前端类型检查"
   else
     bad "前端类型检查"
