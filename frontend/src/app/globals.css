@@ -113,6 +113,10 @@ tbody tr:hover { background: #fbfcfe; }
 .citation-card { margin-bottom: 10px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; }
 .citation-card > span, .citation-card small { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }
 .citation-card p { margin: 9px 0; line-height: 1.6; }
+.citation-locate { margin-top: 12px; }
+.citation-source-backdrop { z-index: 30; }
+.citation-source-preview .alert { margin: 16px 28px 0; }
+.citation-highlight { padding: 2px 1px; border-radius: 3px; background: #ffe66d; color: #14213d; box-shadow: 0 0 0 3px #ffe66d66; outline: none; }
 .usage-row { display: flex; flex-wrap: wrap; gap: 10px; }
 .usage-row span { padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; color: var(--muted); font-size: 13px; }
 .usage-row b { color: var(--ink); }
